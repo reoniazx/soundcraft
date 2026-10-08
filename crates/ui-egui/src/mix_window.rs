@@ -140,8 +140,9 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
         let sr = Rect::from_min_size(pos2(x0 + 2.0, sec.min.y + 16.0), vec2(inner_w - 4.0, 15.0));
         let slot = track.mixer.inserts.iter().position(|i| i.as_ref().is_some_and(|i| plugin_info(&i.plugin).is_some_and(|p| p.is_instrument)));
         match slot {
+            _ if track.kind == TrackKind::Instrument => instrument_slot(app, ui, &track, sr),
             Some(k) => insert_slot(app, ui, &track, k, sr),
-            None if matches!(track.kind, TrackKind::Instrument | TrackKind::Midi) => {
+            None if track.kind == TrackKind::Midi => {
                 ui.painter().text(sr.center(), Align2::CENTER_CENTER, "MIDI in: all", regular(9.0), t.text_dim);
             }
             None => {}
@@ -401,6 +402,32 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
     ui.painter().line_segment([pos2(r.max.x, r.min.y), pos2(r.max.x, r.max.y)], Stroke::new(1.0, t.border));
 }
 
+/// An instrument track's INSTRUMENT row: click opens a hosted instrument's plugin window,
+/// right-click (or click, when none is set) picks another instrument.
+fn instrument_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, r: Rect) {
+    let t = Tokens::DARK;
+    let (id, slot) = (track.id, soundcraft_mix::INSTRUMENT_SLOT);
+    let ins = track.instrument.as_ref();
+    let info = ins.and_then(|i| plugin_info(&i.plugin));
+    let resp = ui.interact(r, ui.id().with(("instrument", id.0)), Sense::click());
+    let fill = if info.is_some() { Color32::from_rgb(52, 62, 80) } else { t.slot_bg };
+    ui.painter().rect(
+        r,
+        CornerRadius::same(2),
+        if resp.hovered() { fill.gamma_multiply(1.3) } else { fill },
+        Stroke::new(1.0, Color32::from_rgb(16, 16, 16)),
+        StrokeKind::Inside,
+    );
+    ui.painter().with_clip_rect(r).text(r.center(), Align2::CENTER_CENTER, info.map_or("no instrument", |p| p.short_name), regular(10.5), t.text);
+    let hosted = ins.is_some_and(|i| soundcraft_mix::is_third_party(&i.plugin));
+    if resp.clicked() && hosted && !app.ui.plugin_windows.contains(&(id, slot)) {
+        app.ui.plugin_windows.push((id, slot));
+    }
+    let menu_resp = if hosted { resp.clone().on_hover_text("Click: open instrument · right-click: change") } else { resp.clone() };
+    let popup = if hosted { egui::Popup::context_menu(&menu_resp) } else { egui::Popup::menu(&menu_resp) };
+    popup.show(|ui| instrument_menu(app, ui, id));
+}
+
 fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect) {
     let t = Tokens::DARK;
     let id = track.id;
@@ -459,6 +486,46 @@ pub fn plugin_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId, slot: usize, oc
     }
     if let Some(plugin) = hosted_menus(ui, false)
         && let Err(e) = app.run("mix.insert", json!({"track": id.0, "slot": slot, "plugin": plugin}))
+    {
+        app.ui.status = e;
+    }
+}
+
+/// The instrument picker of an instrument track: its instrument's editor, then the built-in,
+/// CLAP, VST3 and Audio Units instruments.
+pub fn instrument_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId) {
+    let slot = soundcraft_mix::INSTRUMENT_SLOT;
+    let current = app.engine.session().track(id).and_then(|t| t.instrument.clone());
+    if let Some(info) = current.as_ref().and_then(|i| plugin_info(&i.plugin)) {
+        ui.label(egui::RichText::new(info.name).strong());
+        if let Some(p) = &app.player
+            && p.has_editor(id, slot)
+        {
+            if p.editor_open(id, slot) {
+                if ui.button("Close Plugin Editor").clicked() {
+                    p.close_editor(id, slot);
+                }
+            } else if ui.button("Open Plugin Editor").clicked()
+                && let Err(e) = p.open_editor(id, slot)
+            {
+                app.ui.status = format!("{}: {e}", info.name);
+            }
+        }
+        ui.separator();
+    }
+    let mut picked = None;
+    ui.menu_button("Built-in", |ui| {
+        for p in soundcraft_dsp::plugins().iter().filter(|p| p.is_instrument) {
+            if ui.button(p.name).clicked() {
+                picked = Some(p.id.to_string());
+            }
+        }
+    });
+    if let Some(p) = hosted_menus(ui, true) {
+        picked = Some(p);
+    }
+    if let Some(plugin) = picked
+        && let Err(e) = app.run("mix.instrument", json!({"track": id.0, "plugin": plugin}))
     {
         app.ui.status = e;
     }
