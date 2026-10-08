@@ -322,11 +322,12 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                 }
                 Dialog::TempoChange { at, bpm } => {
                     ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(bpm).speed(0.1).range(1.0..=999.0));
+                        // Same limits the engine enforces (time crate `valid_bpm`).
+                        ui.add(egui::DragValue::new(bpm).speed(0.1).range(5.0..=1000.0));
                         ui.label("bpm");
                     });
                     if buttons(ui, "OK", enter) {
-                        action = Some(("event.tempo".into(), json!({"bpm": bpm, "at": at})));
+                        action = Some(tempo_change_action(*at, *bpm));
                     }
                 }
                 Dialog::Fades { shape } => {
@@ -436,6 +437,11 @@ fn buttons(ui: &mut egui::Ui, ok: &str, enter: bool) -> bool {
     pressed
 }
 
+/// The command the tempo-change dialog runs on OK.
+fn tempo_change_action(at: Samples, bpm: f64) -> (String, Value) {
+    ("event.tempo".into(), json!({"bpm": bpm, "at": at}))
+}
+
 fn audiosuite_window(app: &mut SoundApp, ctx: &egui::Context) {
     let Some(process) = app.ui.audiosuite.clone() else { return };
     let mut open = true;
@@ -508,5 +514,13 @@ mod tests {
         assert!(!takes_path("edit.copy"));
         assert!(d.open_for_command(&e, "file.score_setup"));
         assert!(matches!(d.open, Some(Dialog::ScoreSetup { bars_per_system: 4, .. })));
+    }
+
+    #[test]
+    fn tempo_change_dialog_runs_a_real_command_at_its_position() {
+        let (cmd, params) = tempo_change_action(96_000, 133.5);
+        assert!(soundcraft_engine::command_specs().iter().any(|c| c.id == cmd), "{cmd} is not a command");
+        assert_eq!(params["at"], 96_000);
+        assert_eq!(params["bpm"], 133.5);
     }
 }
