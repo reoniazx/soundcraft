@@ -6,6 +6,7 @@ use egui::{Align2, vec2};
 use serde_json::{Value, json};
 use soundcraft_engine::Engine;
 use soundcraft_model::{ClipId, TrackId};
+use soundcraft_time::Samples;
 
 #[derive(Debug, Clone)]
 pub enum Dialog {
@@ -16,6 +17,8 @@ pub enum Dialog {
     RenameClip { id: ClipId, name: String },
     PathPrompt { cmd: String, title: String, path: String, key: String },
     Number { cmd: String, title: String, key: String, value: f64, suffix: String },
+    /// Tempo change at a position, from double-clicking the tempo ruler.
+    TempoChange { at: Samples, bpm: f64 },
     Fades { shape: String },
     StripSilence { threshold: f64, min_ms: f64, pre_ms: f64, post_ms: f64 },
     Group { name: String, edit: bool, mix: bool, members: Vec<(u64, String, bool)> },
@@ -38,6 +41,7 @@ impl Dialogs {
             Dialog::RenameClip { .. } => "rename_clip",
             Dialog::PathPrompt { .. } => "path",
             Dialog::Number { .. } => "number",
+            Dialog::TempoChange { .. } => "tempo_change",
             Dialog::Fades { .. } => "fades",
             Dialog::StripSilence { .. } => "strip_silence",
             Dialog::Group { .. } => "group",
@@ -167,6 +171,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
         Dialog::RenameTrack { .. } => "Rename Track",
         Dialog::RenameClip { .. } => "Rename Clip",
         Dialog::PathPrompt { title, .. } | Dialog::Number { title, .. } => title.as_str(),
+        Dialog::TempoChange { .. } => "Tempo Change (BPM)",
         Dialog::Fades { .. } => "Fades",
         Dialog::StripSilence { .. } => "Strip Silence",
         Dialog::Group { .. } => "Create Group",
@@ -313,6 +318,15 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     if buttons(ui, "OK", enter) {
                         let v = if key == "by_seconds" { json!({"by": {"seconds": value}}) } else { json!({key.as_str(): value}) };
                         action = Some((cmd.clone(), v));
+                    }
+                }
+                Dialog::TempoChange { at, bpm } => {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(bpm).speed(0.1).range(1.0..=999.0));
+                        ui.label("bpm");
+                    });
+                    if buttons(ui, "OK", enter) {
+                        action = Some(("event.tempo".into(), json!({"bpm": bpm, "at": at})));
                     }
                 }
                 Dialog::Fades { shape } => {
