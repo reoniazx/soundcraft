@@ -168,7 +168,7 @@ fn main() -> eframe::Result {
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
-    eframe::run_native(
+    let result = eframe::run_native(
         "SoundCraft",
         options,
         Box::new(move |cc| {
@@ -188,5 +188,8 @@ fn main() -> eframe::Result {
             }
             Ok(Box::new(App(app)))
         }),
-    )
+    );
+    // The app, its player and their plugin instances are gone once the event loop returns.
+    soundcraft_engine::shutdown_plugin_hosts();
+    result
 }

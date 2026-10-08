@@ -625,6 +625,7 @@ impl IPluginFactoryTrait for Factory {
         kResultOk
     }
     unsafe fn createInstance(&self, cid: FIDString, iid: FIDString, obj: *mut *mut c_void) -> tresult {
+        set_up_late_state();
         let cid = unsafe { *(cid as *const TUID) };
         let unknown = if cid == GAIN_CID {
             ComWrapper::new(GainProcessor {
@@ -676,9 +677,10 @@ impl IPluginFactory2Trait for Factory {
 //
 // The contract real plugins rely on: the host runs the module exit once the factory and every
 // plugin object are released, on the thread that ran the module entry, and before the process
-// tears down the module's statics. Breaking it aborts the process, much as real plugins crash
-// (HALion Sonic segfaults in its static destructors when the module exit never ran; Massive X in
-// its module exit when that runs on another thread than the entry).
+// tears down the module's statics. Breaking it ends the process with status 3, much as real
+// plugins crash (HALion Sonic segfaults in its static destructors when the module exit never ran,
+// and in its module exit when that runs from an exit handler after it was used; Massive X in its
+// module exit when that runs on another thread than the entry).
 
 /// Module entries minus module exits (they nest, as in the VST3 SDK).
 static ENTERED: AtomicI64 = AtomicI64::new(0);
@@ -689,6 +691,15 @@ static FACTORIES: AtomicI64 = AtomicI64::new(0);
 /// Plugin objects alive: components, controllers, views.
 static OBJECTS: AtomicI64 = AtomicI64::new(0);
 static TEARDOWN_REGISTERED: AtomicBool = AtomicBool::new(false);
+/// With `VST3_FIXTURE_LATE_STATE` set, the first plugin made sets up state that the process exit
+/// tears down, like a static a real plugin initialises lazily; the module exit needs it.
+static LATE_STATE_REGISTERED: AtomicBool = AtomicBool::new(false);
+static LATE_STATE_GONE: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" {
+    fn atexit(f: extern "C" fn()) -> c_int;
+    fn _exit(status: c_int) -> !;
+}
 
 /// Counts itself in one of the counters above for as long as it exists.
 struct Live(&'static AtomicI64);
@@ -706,9 +717,10 @@ impl Drop for Live {
     }
 }
 
+/// Ends the process at once with status 3 (no crash report: one test expects this).
 fn violation(what: &str) -> ! {
     eprintln!("vst3-fixture: host contract violation: {what}");
-    std::process::abort();
+    unsafe { _exit(3) }
 }
 
 /// The OS id of the calling thread (`std::thread::current` is gone in exit handlers).
@@ -735,12 +747,20 @@ fn module_entry() -> bool {
         ENTRY_THREAD.store(os_thread(), Ordering::SeqCst);
     }
     if !TEARDOWN_REGISTERED.swap(true, Ordering::SeqCst) {
-        unsafe extern "C" {
-            fn atexit(f: extern "C" fn()) -> c_int;
-        }
         unsafe { atexit(static_teardown) };
     }
     true
+}
+
+/// Called whenever the factory makes a plugin object.
+fn set_up_late_state() {
+    if std::env::var_os("VST3_FIXTURE_LATE_STATE").is_some() && !LATE_STATE_REGISTERED.swap(true, Ordering::SeqCst) {
+        unsafe { atexit(late_state_teardown) };
+    }
+}
+
+extern "C" fn late_state_teardown() {
+    LATE_STATE_GONE.store(true, Ordering::SeqCst);
 }
 
 fn module_exit() -> bool {
@@ -754,6 +774,9 @@ fn module_exit() -> bool {
     }
     if left == 0 && os_thread() != ENTRY_THREAD.load(Ordering::SeqCst) {
         violation("module exit on another thread than the module entry");
+    }
+    if LATE_STATE_GONE.load(Ordering::SeqCst) {
+        violation("module exit after the process exit tore down state the module set up while in use");
     }
     true
 }

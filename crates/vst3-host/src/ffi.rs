@@ -316,7 +316,7 @@ fn open_library(bundle: &Path, exe: &Path) -> Result<(libloading::Library, Optio
 /// with a live instance or leaked objects keeps running and is not exited, and so is one entered
 /// on the main thread when the process exits from another thread. Runs once; later loads are
 /// refused.
-fn exit_modules() {
+pub(crate) fn exit_modules() {
     if MODULES_EXITED.swap(true, Ordering::AcqRel) {
         return;
     }
