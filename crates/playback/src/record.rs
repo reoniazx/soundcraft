@@ -57,6 +57,7 @@ impl Recorder {
             .build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    crate::mark_audio_thread();
                     mon.push(data);
                     if !sh.armed.load(Ordering::Relaxed) {
                         backlog.clear();
@@ -72,7 +73,11 @@ impl Recorder {
                         backlog.extend_from_slice(data);
                     }
                 },
-                |e| log::warn!("input stream error: {e}"),
+                |e| {
+                    // Possibly the audio thread (see `crate::mark_audio_thread`).
+                    crate::mark_audio_thread();
+                    log::warn!("input stream error: {e}");
+                },
                 None,
             )
             .map_err(|e| e.to_string())?;
