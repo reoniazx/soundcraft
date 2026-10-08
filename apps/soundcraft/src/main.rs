@@ -9,16 +9,22 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod control_server;
+#[cfg(target_os = "macos")]
+mod native_menu;
 
 use soundcraft_engine::Engine;
 use soundcraft_ui_egui::{Services, SoundApp, UiState};
 use std::sync::Arc;
 
-struct App(SoundApp);
+struct App(SoundApp, #[cfg(target_os = "macos")] native_menu::NativeMenu);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        self.1.process(&mut self.0);
         self.0.logic(ctx);
+        #[cfg(target_os = "macos")]
+        self.1.sync(&self.0);
         // Files dropped on the window: sessions open, audio/MIDI import.
         let dropped: Vec<String> =
             ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().into_owned()).filter(|s| !s.is_empty()).collect());
@@ -28,7 +34,12 @@ impl eframe::App for App {
         if self.0.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        let title = format!("{} — SoundCraft", self.0.engine.session().name);
+        let title = format!(
+            "{}{} — SoundCraft — {}",
+            self.0.engine.session().name,
+            if self.0.engine.is_dirty() { " *" } else { "" },
+            if self.0.ui.window == soundcraft_ui_egui::MainWindow::Edit { "Edit" } else { "Mix" }
+        );
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -186,7 +197,17 @@ fn main() -> eframe::Result {
             for f in &files {
                 open_path(&mut app, f);
             }
-            Ok(Box::new(App(app)))
+            #[cfg(target_os = "macos")]
+            let menu = native_menu::NativeMenu::new(&app, &cc.egui_ctx).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            #[cfg(target_os = "macos")]
+            {
+                app.native_menu_bar = true;
+            }
+            Ok(Box::new(App(
+                app,
+                #[cfg(target_os = "macos")]
+                menu,
+            )))
         }),
     )
 }

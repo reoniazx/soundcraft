@@ -197,6 +197,8 @@ pub struct SoundApp {
     recorder_failed: bool,
     pub ui: UiState,
     pub services: Services,
+    /// Set only by a desktop host after installing an OS menu bar.
+    pub native_menu_bar: bool,
     /// Folder for crash-recovery autosaves (native apps set it).
     pub autosave_dir: Option<std::path::PathBuf>,
     /// Folder for user plugin presets (native apps set it).
@@ -243,6 +245,7 @@ impl SoundApp {
             recorder_failed: false,
             ui: UiState::default(),
             services,
+            native_menu_bar: false,
             autosave_dir: None,
             preset_dir: None,
             last_autosave: 0.0,
@@ -767,7 +770,9 @@ impl SoundApp {
             ctx.memory_mut(|m| m.reset_areas());
         }
         shortcuts::handle(self, &ctx);
-        menus::menu_bar(self, ui);
+        if !self.native_menu_bar {
+            menus::menu_bar(self, ui);
+        }
         match self.ui.window {
             MainWindow::Edit => edit_window::show(self, ui),
             MainWindow::Mix => mix_window::show(self, ui),
