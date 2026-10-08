@@ -99,6 +99,7 @@ struct AudioState {
 fn new_engine(sr: f32) -> MixEngine {
     let mut m = MixEngine::new(sr, BLOCK);
     m.set_external_instances(true);
+    m.metronome = true;
     m
 }
 
