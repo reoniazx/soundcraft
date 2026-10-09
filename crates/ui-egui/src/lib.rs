@@ -232,6 +232,16 @@ pub struct SoundApp {
     pub video: video_track::VideoPool,
 }
 
+/// Whether another automation-write pass is due: the transport moved at least
+/// `step` since `last` in either direction. `last == i64::MIN` marks "never
+/// written", so the first pass after (re)start is always due. Saturating
+/// arithmetic keeps restarts and loop wraps overflow-free: the previous
+/// `(pos - last).abs()` panicked in debug builds on the first playing frame,
+/// when `last` is still `i64::MIN`.
+fn automation_step_due(pos: Samples, last: Samples, step: Samples) -> bool {
+    last == i64::MIN || pos.saturating_sub(last) >= step || last.saturating_sub(pos) >= step
+}
+
 impl SoundApp {
     pub fn new(engine: Engine, player: Option<Player>, services: Services) -> Self {
         SoundApp {
@@ -531,7 +541,7 @@ impl SoundApp {
         }
         let pos = self.position();
         let step = self.engine.session().sample_rate.samples(0.02);
-        if (pos - self.last_write_at).abs() < step {
+        if !automation_step_due(pos, self.last_write_at, step) {
             return;
         }
         self.last_write_at = pos;
@@ -823,4 +833,28 @@ fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], gr: f32, dt: f32) {
         d.hold = d.level;
     }
     d.gr = if gr > d.gr { gr } else { d.gr * fall };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::automation_step_due;
+
+    #[test]
+    fn automation_first_pass_after_start_is_due_without_overflow() {
+        // `last_write_at` starts (and resets) at `i64::MIN`: the previous
+        // `(pos - last).abs()` panicked here in debug builds.
+        assert!(automation_step_due(0, i64::MIN, 960));
+        assert!(automation_step_due(48_000, i64::MIN, 960));
+    }
+
+    #[test]
+    fn automation_write_throttles_to_step() {
+        assert!(!automation_step_due(1_000, 900, 960));
+        assert!(automation_step_due(2_000, 900, 960));
+    }
+
+    #[test]
+    fn automation_write_fires_after_loop_wrap() {
+        assert!(automation_step_due(0, 1_000_000, 960));
+    }
 }
