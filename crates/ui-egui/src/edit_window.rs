@@ -32,6 +32,18 @@ pub struct EditLayout {
     pub rows: Vec<(u64, [f32; 4])>,
     pub scroll_y: f32,
     pub content_h: f32,
+    /// Follow-hold: the view was moved by something other than the playhead
+    /// follow (a manual pan, scrollbar, universe jump, or programmatic
+    /// scroll) during playback, so timeline auto-scroll stays paused until
+    /// the playhead is scrolled back into view (or the transport
+    /// stops/starts, or a scrolling mode is re-selected). Lets the timeline
+    /// be inspected anywhere while playing.
+    pub follow_hold: bool,
+    /// Session `zoom.scroll` seen by the last overlay frame, for telling our
+    /// own follow jumps apart from outside view moves.
+    pub last_scroll: Samples,
+    /// Follow target issued by the last overlay frame (`None` when none).
+    pub last_follow_to: Option<Samples>,
 }
 
 pub fn x_of(s: &Session, tl: Rect, at: Samples) -> f32 {
@@ -1679,7 +1691,44 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
     }
 }
 
+/// Next follow state after observing one frame: `(hold, follow_to)`.
+///
+/// The view is ours to move only while nothing else moved it: when the
+/// session scroll differs from both the last seen value and our own last
+/// follow target, something else (a manual pan, scrollbar, universe jump,
+/// or programmatic scroll) took over, so the follow pauses (`hold`) and no
+/// jump is issued. Stopping, or scrolling back to the playhead, clears the
+/// hold. Only `page`/`continuous`/`center` ever issue follow jumps while
+/// playing; `none`/`after_playback` leave the view alone.
+fn follow_update(
+    playing: bool,
+    mode_follow: bool,
+    playhead_visible: bool,
+    cur: Samples,
+    last_scroll: Samples,
+    last_follow_to: Option<Samples>,
+    hold: bool,
+    pos: Samples,
+) -> (bool, Option<Samples>) {
+    if !playing || playhead_visible {
+        return (false, None);
+    }
+    if cur != last_scroll && Some(cur) != last_follow_to {
+        return (mode_follow, None);
+    }
+    if hold || !mode_follow {
+        return (hold, None);
+    }
+    (false, Some(pos))
+}
+
 /// Selection overlay, insertion point and playhead across rulers and tracks.
+/// While playing, auto-scroll keeps the playhead in view for the follow
+/// modes (`page`/`continuous`/`center`) — but any outside view move (a manual
+/// pan, scrollbar, universe jump, or programmatic scroll) pauses it, so the
+/// timeline can be inspected anywhere during playback. Scrolling back to the
+/// playhead, stopping/starting, or re-selecting a scrolling mode resumes the
+/// follow. `none` and `after_playback` never scroll during playback.
 fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
     let t = Tokens::DARK;
     let mut scroll_to: Option<Samples> = None;
@@ -1721,10 +1770,18 @@ fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
     if app.is_playing() {
         let x = x_of(s, tl, app.position());
         painter.line_segment([pos2(x, area.min.y), pos2(x, area.max.y)], Stroke::new(1.5, t.playhead));
-        // Page scrolling.
-        if s.edit.scrolling != "none" && (x > tl.max.x || x < tl.min.x) {
-            scroll_to = Some(app.position());
-        }
+        // Session reads first (owned copies), then the layout mutation: the
+        // two borrow disjoint fields.
+        let pos = app.position();
+        let cur = s.edit.zoom.scroll;
+        let mode_follow = matches!(s.edit.scrolling.as_str(), "page" | "continuous" | "center");
+        let visible = x >= tl.min.x && x <= tl.max.x;
+        let layout = &mut app.edit_layout;
+        let (hold, follow_to) = follow_update(true, mode_follow, visible, cur, layout.last_scroll, layout.last_follow_to, layout.follow_hold, pos);
+        layout.follow_hold = hold;
+        layout.last_scroll = cur;
+        layout.last_follow_to = follow_to;
+        scroll_to = follow_to;
     }
     // Ghost of a clip move.
     if let Some(Gesture::MoveClips { clips, delta, to_track, .. }) = &app.gesture {
@@ -1761,5 +1818,49 @@ fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
     }
     if let Some(at) = scroll_to {
         let _ = app.engine.execute("view.scroll", &json!({"to": at}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::follow_update;
+
+    #[test]
+    fn follow_jumps_to_offscreen_playhead_while_playing() {
+        // Steady view, follow mode, playhead left the screen: jump to it.
+        assert_eq!(follow_update(true, true, false, 1_000, 1_000, None, false, 96_000), (false, Some(96_000)));
+    }
+
+    #[test]
+    fn follow_leaves_onscreen_playhead_alone() {
+        assert_eq!(follow_update(true, true, true, 1_000, 1_000, None, false, 96_000), (false, None));
+    }
+
+    #[test]
+    fn follow_never_scrolls_when_stopped_nor_in_free_modes() {
+        assert_eq!(follow_update(false, true, false, 1_000, 1_000, None, false, 96_000), (false, None));
+        // `none`/`after_playback` never follow, even with a steady view.
+        assert_eq!(follow_update(true, false, false, 1_000, 1_000, None, false, 96_000), (false, None));
+        assert_eq!(follow_update(true, false, false, 9_000, 1_000, None, false, 96_000), (false, None));
+    }
+
+    #[test]
+    fn outside_view_move_pauses_the_follow() {
+        // The view moved and it was not our own jump: pause, no jump.
+        assert_eq!(follow_update(true, true, false, 9_000, 1_000, None, false, 96_000), (true, None));
+        // A held view stays held while it sits still elsewhere.
+        assert_eq!(follow_update(true, true, false, 9_000, 9_000, None, true, 96_000), (true, None));
+    }
+
+    #[test]
+    fn own_follow_jump_is_not_mistaken_for_a_takeover() {
+        // The scroll equals the target we issued last frame: keep following.
+        assert_eq!(follow_update(true, true, false, 96_000, 1_000, Some(96_000), false, 97_000), (false, Some(97_000)));
+    }
+
+    #[test]
+    fn hold_clears_when_playhead_returns_or_transport_stops() {
+        assert_eq!(follow_update(true, true, true, 9_000, 9_000, None, true, 96_000), (false, None));
+        assert_eq!(follow_update(false, true, false, 9_000, 9_000, None, true, 96_000), (false, None));
     }
 }
