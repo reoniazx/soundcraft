@@ -15,14 +15,20 @@ pub struct NativeMenu {
     menu: Menu,
     entries: Vec<Entry>,
     events: Receiver<MenuEvent>,
+    /// When `sync` last walked the entries; see `SYNC_EVERY`.
+    last_sync: Option<std::time::Instant>,
 }
+
+/// `sync` walks every menu leaf (~500), so it runs a few times a second rather than every frame,
+/// and right after a menu click.
+const SYNC_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
 
 impl NativeMenu {
     /// Called on the UI thread after eframe has created NSApplication.
     pub fn new(app: &SoundApp, ctx: &egui::Context) -> muda::Result<Self> {
         let menu = Menu::new();
         let (tx, events) = channel();
-        let mut native = Self { menu, entries: Vec::new(), events };
+        let mut native = Self { menu, entries: Vec::new(), events, last_sync: None };
         let app_menu = Submenu::new("SoundCraft", true);
         native.add_item(app, &app_menu, "About SoundCraft", "", Some("window.about".into()))?;
         native.add_item(app, &app_menu, "Session Info", "", Some("window.session_info".into()))?;
@@ -73,17 +79,29 @@ impl NativeMenu {
 
     pub fn process(&mut self, app: &mut SoundApp) {
         while let Ok(event) = self.events.try_recv() {
+            // A click changes state (and Cocoa flips the item's check mark): sync on the next pass.
+            self.last_sync = None;
             if let Some(entry) = self.entries.iter().find(|e| e.item.id() == &event.id)
                 && let Some(command) = &entry.command
                 && menus::item_state(app, &entry.path, Some(command)).0
             {
-                menus::invoke_menu(app, command, &entry.path);
+                if entry.path.is_empty() && command.starts_with("window.") {
+                    // The application menu's About / Session Info open their window (never close it).
+                    let _ = app.run(command, serde_json::json!({"value": true}));
+                } else {
+                    menus::invoke_menu(app, command, &entry.path);
+                }
             }
         }
     }
 
     /// Refresh after engine/control changes; avoid touching Cocoa items with unchanged state.
     pub fn sync(&mut self, app: &SoundApp) {
+        let now = std::time::Instant::now();
+        if self.last_sync.is_some_and(|t| now.duration_since(t) < SYNC_EVERY) {
+            return;
+        }
+        self.last_sync = Some(now);
         for entry in &mut self.entries {
             let (enabled, checked) = menus::item_state(app, &entry.path, entry.command.as_deref());
             if enabled != entry.enabled {
