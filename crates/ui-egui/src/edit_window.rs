@@ -839,7 +839,15 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
         TrackKind::Video => "VIDEO",
     };
     if !kind_label.is_empty() {
-        ui.painter().text(pos2(pl_r.max.x + 4.0, name_r.center().y), Align2::LEFT_CENTER, kind_label, bold(9.0), t.text_dim);
+        let kr = ui.painter().text(pos2(pl_r.max.x + 4.0, name_r.center().y), Align2::LEFT_CENTER, kind_label, bold(9.0), t.text_dim);
+        if track.kind == TrackKind::Instrument {
+            // The instrument picker (and the instrument's editor) behind the INST label.
+            let name = track.instrument.as_ref().and_then(|i| crate::mix_window::plugin_info(&i.plugin)).map_or("none", |p| p.name);
+            let resp = ui
+                .interact(kr.expand(3.0), ui.id().with(("instrument", id.0)), Sense::click())
+                .on_hover_text(format!("Instrument: {name} (click to change or open its editor)"));
+            egui::Popup::menu(&resp).show(|ui| crate::mix_window::instrument_menu(app, ui, id));
+        }
     }
     if h < 30.0 {
         return;
