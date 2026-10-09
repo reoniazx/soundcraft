@@ -23,7 +23,7 @@ claude mcp add soundcraft -- soundcraft-cli mcp --demo
 | `list_commands` | Discover every command (id, label, menu path, shortcut, params doc, enabled). |
 | `execute` | Run one command with JSON params. |
 | `batch` | Run several commands in order (`keep_going` optional). |
-| `inspect_session` | Verify work: tracks, clips, mixer, plugins, sends, automation, markers, selection. |
+| `inspect_session` | Verify work: tracks, clips, mixer, plugins, sends, automation, markers, selection; each `sources[]` entry includes `loaded` (decoded audio in the pool). |
 | `new_session`, `open_session`, `save_session` | Session files (`.scraft`, audio in `Audio Files/`). |
 | `import_audio` | WAV, AIFF, FLAC, MP3, OGG, AAC/M4A, ALAC, CAF onto a new or existing track. |
 | `bounce_mix` | Render to WAV/AIFF/FLAC; returns peak dBFS and integrated LUFS. |
