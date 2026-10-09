@@ -17,8 +17,7 @@ pub enum Dialog {
     RenameClip { id: ClipId, name: String },
     PathPrompt { cmd: String, title: String, path: String, key: String },
     Number { cmd: String, title: String, key: String, value: f64, suffix: String },
-    /// Tempo change at a position, from double-clicking the tempo ruler.
-    TempoChange { at: Samples, bpm: f64 },
+    TempoChange { at: Samples, bpm: f64 }, // from double-clicking the tempo ruler
     Fades { shape: String },
     StripSilence { threshold: f64, min_ms: f64, pre_ms: f64, post_ms: f64 },
     Group { name: String, edit: bool, mix: bool, members: Vec<(u64, String, bool)> },
