@@ -354,10 +354,19 @@ impl SoundApp {
             self.engine.session_mut().edit.selection = Range::point(pos);
         }
         if after_playback {
-            // After Playback never scrolls while playing, so jump the view to
-            // the stopped position now; every other mode keeps its view.
+            // After Playback never scrolls while playing, so bring the stopped
+            // position into view now (only if it is off-screen); every other
+            // mode keeps its view.
             let at = stop_at.max(0);
-            self.engine.session_mut().edit.zoom.scroll = at;
+            let (scroll, spp) = {
+                let z = &self.engine.session().edit.zoom;
+                (z.scroll, z.samples_per_px.max(0.01))
+            };
+            let width = f64::from(self.edit_layout.timeline[2] - self.edit_layout.timeline[0]).max(0.0);
+            let end = scroll.saturating_add((width * spp) as Samples);
+            if at < scroll || at >= end {
+                let _ = self.engine.execute("view.scroll", &json!({ "to": at }));
+            }
         }
         self.edit_layout.follow_hold = false;
     }
