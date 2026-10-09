@@ -302,6 +302,10 @@ impl SoundApp {
                 if id == "app.quit" {
                     self.quit_requested = true;
                 }
+                if id == "options.scrolling" {
+                    // Re-selecting a scrolling mode resumes the playhead follow.
+                    self.edit_layout.follow_hold = false;
+                }
                 Ok(v)
             }
             Err(e) => {
@@ -330,6 +334,12 @@ impl SoundApp {
         }
         self.engine.transport.playing = true;
         self.engine.transport.position = from;
+        // A fresh start resumes the playhead follow: clear a manual hold and
+        // re-sync the follow tracker so the current view is not mistaken for
+        // an outside move on the first frame.
+        self.edit_layout.follow_hold = false;
+        self.edit_layout.last_scroll = self.engine.session().edit.zoom.scroll;
+        self.edit_layout.last_follow_to = None;
     }
 
     fn stop_play(&mut self) {
@@ -342,11 +352,33 @@ impl SoundApp {
         self.sim = None;
         self.engine.transport.playing = false;
         self.engine.transport.recording = false;
-        let s = self.engine.session();
-        if s.edit.insertion_follows_playback {
+        let stop_at = self.engine.transport.position;
+        // Snapshot the session flags first: `session_mut` below needs a
+        // mutable borrow, so no session borrow may span it.
+        let (follow_insertion, after_playback) = {
+            let s = self.engine.session();
+            (s.edit.insertion_follows_playback, s.edit.scrolling == "after_playback")
+        };
+        if follow_insertion {
             let pos = self.engine.transport.position;
             self.engine.session_mut().edit.selection = Range::point(pos);
         }
+        if after_playback {
+            // After Playback never scrolls while playing, so bring the stopped
+            // position into view now (only if it is off-screen); every other
+            // mode keeps its view.
+            let at = stop_at.max(0);
+            let (scroll, spp) = {
+                let z = &self.engine.session().edit.zoom;
+                (z.scroll, z.samples_per_px.max(0.01))
+            };
+            let width = f64::from(self.edit_layout.timeline[2] - self.edit_layout.timeline[0]).max(0.0);
+            let end = scroll.saturating_add((width * spp) as Samples);
+            if at < scroll || at >= end {
+                let _ = self.engine.execute("view.scroll", &json!({ "to": at }));
+            }
+        }
+        self.edit_layout.follow_hold = false;
     }
 
     fn start_recording(&mut self) {
