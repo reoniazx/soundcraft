@@ -3,7 +3,7 @@
 use super::*;
 use crate::cmd;
 use serde_json::json;
-use soundcraft_model::Session;
+use soundcraft_model::{Session, TrackKind};
 use soundcraft_time::SampleRate;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Audio...",
             ["File", "Import"],
             Some("Cmd+Shift+I"),
-            "{path | paths: [..], track?: target track, at?: position, new_tracks?: true}",
+            "{path | paths: [..], track?: target track, at?: position, new_tracks?: true (default; false uses `track` or the selected audio track)}",
             always,
             import_audio
         ),
@@ -208,7 +208,7 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
         return Err(bad("file.import_audio", "`path` or `paths` required"));
     }
     let at = position_param(e, "file.import_audio", p, "at")?.unwrap_or(0).max(0);
-    let target = track_param(e, "file.import_audio", p, "track")?;
+    let target = import_audio_target(e, p)?;
     let mut out = Vec::new();
     for path in &paths {
         let bytes = std::fs::read(path).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
@@ -217,6 +217,21 @@ fn import_audio(e: &mut Engine, p: &Value) -> Result<Value> {
         out.push(r);
     }
     Ok(json!({"imported": out}))
+}
+
+/// Destination for `file.import_audio`: an explicit `track` wins; otherwise `new_tracks`
+/// (default true) creates a new track per file, and `new_tracks: false` uses the selected
+/// audio track or errors when none is selected.
+fn import_audio_target(e: &Engine, p: &Value) -> Result<Option<TrackId>> {
+    if let Some(t) = track_param(e, "file.import_audio", p, "track")? {
+        return Ok(Some(t));
+    }
+    if bool_or(p, "new_tracks", true) {
+        return Ok(None);
+    }
+    let s = e.session();
+    let selected = s.edit.selected_tracks.iter().find_map(|id| s.track(*id).filter(|t| t.kind == TrackKind::Audio).map(|t| t.id));
+    selected.map(Some).ok_or_else(|| bad("file.import_audio", "`new_tracks: false` needs `track` or a selected audio track"))
 }
 
 /// `fold_down: "stereo"` bounces an ITU stereo fold-down of a surround mix.
@@ -269,4 +284,69 @@ fn write_score(e: &mut Engine, p: &Value, id: &str, svg: bool) -> Result<Value> 
     std::fs::write(&path, &text).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
     let measures = parts.iter().map(|p| p.measures.len()).max().unwrap_or(0);
     Ok(json!({"path": path, "parts": parts.len(), "measures": measures}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Engine;
+    use soundcraft_audio_io::{AudioBuffer, EncodeOptions};
+    use soundcraft_model::ChannelFormat;
+
+    fn tone_wav(dir: &std::path::Path, name: &str) -> String {
+        let tone: Vec<f32> = (0..4_800).map(|i| (i as f32 * 0.1).sin() * 0.2).collect();
+        let buf = AudioBuffer { sample_rate: 48_000, channels: vec![tone] };
+        let bytes = soundcraft_audio_io::encode(&buf, &EncodeOptions::default()).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn import_audio_honours_new_tracks() {
+        let dir = std::env::temp_dir().join(format!("sc-import-new-tracks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = tone_wav(&dir, "tone.wav");
+
+        // Default / new_tracks:true: create a new track even when one is selected.
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 1, "name": "Target", "format": "mono"})).unwrap();
+        let target = e.session().tracks[0].id;
+        e.session_mut().edit.selected_tracks = vec![target];
+        e.execute("file.import_audio", &json!({"path": wav, "new_tracks": true})).unwrap();
+        assert_eq!(e.session().tracks.len(), 2);
+        assert_eq!(e.session().track(target).unwrap().clips().len(), 0);
+        assert_eq!(e.session().tracks[1].clips().len(), 1);
+
+        // new_tracks:false with a selected audio track: import onto it.
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 1, "name": "Target", "format": "mono"})).unwrap();
+        let target = e.session().tracks[0].id;
+        e.session_mut().edit.selected_tracks = vec![target];
+        e.execute("file.import_audio", &json!({"path": wav, "new_tracks": false})).unwrap();
+        assert_eq!(e.session().tracks.len(), 1);
+        assert_eq!(e.session().track(target).unwrap().clips().len(), 1);
+
+        // new_tracks:false with no selection and no track: clear error.
+        let mut e = Engine::default();
+        let err = e.execute("file.import_audio", &json!({"path": wav, "new_tracks": false})).unwrap_err();
+        assert!(err.to_string().contains("new_tracks: false"), "{err}");
+
+        // Explicit track wins over new_tracks:true.
+        let mut e = Engine::default();
+        e.execute("track.new", &json!({"count": 1, "name": "Target", "format": "mono"})).unwrap();
+        e.execute("file.import_audio", &json!({"path": wav, "track": "Target", "new_tracks": true})).unwrap();
+        assert_eq!(e.session().tracks.len(), 1);
+        assert_eq!(e.session().tracks[0].clips().len(), 1);
+
+        // Omitted new_tracks still creates a track on a blank session.
+        let mut e = Engine::default();
+        e.execute("file.import_audio", &json!({"path": wav})).unwrap();
+        assert_eq!(e.session().tracks.len(), 1);
+        assert_eq!(e.session().tracks[0].kind, TrackKind::Audio);
+        assert_eq!(e.session().tracks[0].format, ChannelFormat::Mono);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
