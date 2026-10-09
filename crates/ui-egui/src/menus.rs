@@ -240,7 +240,7 @@ fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str
     let checked = checked_state(app, &n.path, id.as_deref());
     let label = if checked { format!("✔ {}", n.label) } else { n.label.clone() };
     let shortcut = id.as_deref().and_then(soundcraft_engine::find_command).and_then(|c| c.shortcut).unwrap_or("");
-    let btn = egui::Button::new(label).shortcut_text(shortcut);
+    let btn = egui::Button::new(label).shortcut_text(crate::shortcuts::shortcut_label(shortcut, ui.ctx().os().is_mac()));
     if ui.add_enabled(enabled, btn).clicked()
         && let Some(id) = id
     {

@@ -95,7 +95,8 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
                     let l = ui.selectable_label(sel, &e.label);
                     ui.label(egui::RichText::new(&e.path).small().color(t.text_dim));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(&e.shortcut).font(mono(10.0)).color(t.text_dim));
+                        let sc = crate::shortcuts::shortcut_label(&e.shortcut, ctx.os().is_mac());
+                        ui.label(egui::RichText::new(sc).font(mono(10.0)).color(t.text_dim));
                     });
                     l
                 });

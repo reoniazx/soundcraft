@@ -227,3 +227,38 @@ fn tab_clip(app: &mut SoundApp, back: bool) {
         let _ = app.run("transport.locate", json!({"at": n}));
     }
 }
+
+/// Shortcut text for display. The registry stores macOS-style strings ("Cmd+N"); off macOS the Cmd
+/// modifier is the Ctrl key. Mac-only Control chords ("Cmd+Ctrl+S") have no key there, so they show nothing.
+pub fn shortcut_label(s: &str, mac: bool) -> String {
+    if mac || !s.split('+').any(|p| p == "Cmd") {
+        return s.to_string();
+    }
+    if s.split('+').any(|p| p == "Ctrl") {
+        return String::new();
+    }
+    s.split('+').map(|p| if p == "Cmd" { "Ctrl" } else { p }).collect::<Vec<_>>().join("+")
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::shortcut_label;
+
+    #[test]
+    fn cmd_becomes_ctrl_off_mac() {
+        assert_eq!(shortcut_label("Cmd+N", false), "Ctrl+N");
+        assert_eq!(shortcut_label("Cmd+Shift+W", false), "Ctrl+Shift+W");
+        assert_eq!(shortcut_label("Cmd+Alt+B", false), "Ctrl+Alt+B");
+        assert_eq!(shortcut_label("Cmd+,", false), "Ctrl+,");
+        assert_eq!(shortcut_label("Shift+R", false), "Shift+R");
+        assert_eq!(shortcut_label("Cmd+Ctrl+S", false), "");
+        assert_eq!(shortcut_label("", false), "");
+    }
+
+    #[test]
+    fn unchanged_on_mac() {
+        for s in ["Cmd+N", "Cmd+Shift+W", "Cmd+Alt+B", "Shift+R", "Cmd+Ctrl+S"] {
+            assert_eq!(shortcut_label(s, true), s);
+        }
+    }
+}
