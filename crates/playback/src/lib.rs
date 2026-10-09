@@ -103,6 +103,7 @@ struct AudioState {
 fn new_engine(sr: f32) -> MixEngine {
     let mut m = MixEngine::new(sr, BLOCK);
     m.set_external_instances(true);
+    m.metronome = true;
     m
 }
 
@@ -226,7 +227,7 @@ impl AudioState {
             if self.mix.input.len() != ch {
                 self.mix.input = vec![vec![0.0; BLOCK]; ch];
             }
-            ring.pop_into(&mut self.mix.input, n);
+            ring.pop_into(&mut self.mix.input, n, self.session.sample_rate.hz());
         }
         self.mix.monitor_only = !self.playing;
         self.mix.recording = self.recording;
