@@ -184,6 +184,12 @@ claude mcp add soundcraft -- soundcraft-cli mcp --demo
 See [`docs/control-protocol.md`](docs/control-protocol.md) and [`docs/mcp.md`](docs/mcp.md).
 `soundcraft-cli commands` lists every command.
 
+Open **SoundCraft › Session Audio Health** to check loaded audio availability, sample-rate
+mismatches and clip source bounds across all playlists, including alternate takes. The report
+offers a refresh button and suggests how to resolve each issue. Scripts can obtain the same JSON
+report with `soundcraft-cli run --demo --cmd 'session.audio_health={}'`. This checks loaded media,
+not files on disk, signal levels, plugins or routing.
+
 ## How it's built
 
 SoundCraft is a Cargo workspace of small crates with strict layering: nothing below the UI knows

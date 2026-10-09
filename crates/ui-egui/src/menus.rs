@@ -19,6 +19,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("window.clip_list_view", "Clip List", "View > Other Displays > Clip List", None),
     ("window.narrow_mix", "Narrow Mix", "View > Narrow Mix", Some("Cmd+Alt+M")),
     ("window.session_info", "Session Info", "", None),
+    ("window.audio_health", "Session Audio Health", "", None),
     ("window.about", "About SoundCraft", "", None),
     ("window.close", "Close Window", "Window > Close Window", Some("Cmd+W")),
     ("window.hide_floating", "Hide All Floating Windows", "Window > Hide All Floating Windows", Some("Cmd+Ctrl+W")),
@@ -191,6 +192,9 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     }
                     if ui.button("Session Info").clicked() {
                         app.ui.show_session_info = true;
+                    }
+                    if ui.button("Session Audio Health").clicked() {
+                        let _ = app.run("window.audio_health", json!({"value": true}));
                     }
                     ui.separator();
                     if ui.button("Quit").clicked() {
@@ -410,6 +414,10 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "window.track_list" => toggle(&mut app.ui.show_tracks_list),
         "window.narrow_mix" => toggle(&mut app.ui.narrow_mix),
         "window.session_info" => toggle(&mut app.ui.show_session_info),
+        "window.audio_health" => {
+            app.audio_health_report = None;
+            toggle(&mut app.ui.show_audio_health)
+        }
         "window.about" => toggle(&mut app.ui.show_about),
         "window.midi_editor" | "window.midi_front" => toggle(&mut app.ui.show_midi_editor),
         "window.midi_back" => {
@@ -471,6 +479,7 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             app.ui.show_memory_locations = false;
             app.ui.show_undo_history = false;
             app.ui.show_session_info = false;
+            app.ui.show_audio_health = false;
             app.ui.plugin_windows.clear();
             app.ui.audiosuite = None;
             json!({})
