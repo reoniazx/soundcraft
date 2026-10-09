@@ -661,7 +661,9 @@ impl MixEngine {
         }
         // Metronome: summed after the master fader, so it reaches the speakers without passing
         // through any track, send or insert. Only the playback engine sets `metronome`.
-        if self.metronome && s.edit.click && !(s.edit.flag("click.only_during_record") && !self.recording) {
+        // Not while monitoring only (transport stopped): the position does not advance there, so the
+        // start of the same beat would repeat every block as a buzz.
+        if self.metronome && !self.monitor_only && s.edit.click && !(s.edit.flag("click.only_during_record") && !self.recording) {
             click::render(s, pos, frames, &mut self.main);
         }
         // Output: min(out.len(), main channels) channels; any further output channels are silent.
@@ -2002,6 +2004,20 @@ mod tests {
         let s = Session::default();
         let out = render_range(&s, Range::new(0, 1000), 128);
         assert!(out.iter().all(|c| c.iter().all(|x| *x == 0.0)));
+    }
+
+    #[test]
+    fn stopped_monitoring_does_not_click() {
+        let mut s = Session::default();
+        s.edit.click = true;
+        let mut eng = MixEngine::new(48_000.0, 512);
+        eng.metronome = true;
+        eng.monitor_only = true;
+        let mut out = vec![vec![0.0f32; 512]; 2];
+        for _ in 0..4 {
+            eng.render(&s, 0, 512, &mut out);
+            assert!(out.iter().all(|c| c.iter().all(|x| *x == 0.0)));
+        }
     }
 
     /// Renders `len` frames from zero the way playback does (metronome on), in blocks of `block`.
