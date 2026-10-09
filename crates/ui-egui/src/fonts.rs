@@ -27,9 +27,31 @@ const BOLD: &[(&str, u32)] = &[
 ];
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load(cands: &[(&str, u32)]) -> Option<FontData> {
+#[cfg(target_os = "linux")]
+fn load_from_fontconfig(bold: bool) -> Option<FontData> {
+    let pattern = if bold { "sans-serif:style=Bold" } else { "sans-serif" };
+    let output = std::process::Command::new("fc-match").args(["--format=%{file}\\n%{index}\\n", pattern]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let mut lines = stdout.lines();
+    let path = lines.next()?.trim();
+    let index = lines.next()?.trim().parse().ok()?;
+    let bytes = std::fs::read(path).ok()?;
+    let mut font = FontData::from_owned(bytes);
+    font.index = index;
+    Some(font)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load(cands: &[(&str, u32)], bold: bool) -> Option<FontData> {
     if std::env::var_os("SOUNDCRAFT_NO_SYSTEM_FONTS").is_some() {
         return None;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(font) = load_from_fontconfig(bold) {
+        return Some(font);
     }
     for (p, idx) in cands {
         if let Ok(bytes) = std::fs::read(p) {
@@ -42,7 +64,7 @@ fn load(cands: &[(&str, u32)]) -> Option<FontData> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load(_: &[(&str, u32)]) -> Option<FontData> {
+fn load(_: &[(&str, u32)], _: bool) -> Option<FontData> {
     None
 }
 
@@ -50,13 +72,13 @@ pub fn definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let base: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let mut bold_family = base.clone();
-    if let Some(reg) = load(REGULAR) {
+    if let Some(reg) = load(REGULAR, false) {
         fonts.font_data.insert("system-regular".into(), Arc::new(reg));
         if let Some(f) = fonts.families.get_mut(&FontFamily::Proportional) {
             f.insert(0, "system-regular".into());
         }
     }
-    if let Some(b) = load(BOLD) {
+    if let Some(b) = load(BOLD, true) {
         fonts.font_data.insert("system-bold".into(), Arc::new(b));
         bold_family.insert(0, "system-bold".into());
     } else if fonts.font_data.contains_key("system-regular") {
