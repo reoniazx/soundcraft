@@ -15,12 +15,14 @@ mod control_server;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
+#[cfg(target_os = "macos")]
+mod native_menu;
 
 use soundcraft_engine::Engine;
 use soundcraft_ui_egui::{Services, SoundApp, UiState};
 use std::sync::Arc;
 
-struct App(SoundApp, Option<&'static logging::AppLogger>);
+struct App(SoundApp, Option<&'static logging::AppLogger>, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -28,7 +30,15 @@ impl eframe::App for App {
         if let Some(logger) = self.1 {
             logger.report_audio_thread();
         }
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.2 {
+            menu.process(&mut self.0);
+        }
         self.0.logic(ctx);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &mut self.2 {
+            menu.sync(&self.0);
+        }
         // Files dropped on the window: sessions open, audio/MIDI import.
         let dropped: Vec<String> =
             ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_string_lossy().into_owned()).filter(|s| !s.is_empty()).collect());
@@ -38,7 +48,18 @@ impl eframe::App for App {
         if self.0.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        let title = format!("{} — SoundCraft", self.0.engine.session().name);
+        // With the system menu bar there is no egui bar showing the window and dirty state, so the
+        // title carries them; elsewhere the egui menu bar already does.
+        let title = if self.0.native_menu_bar {
+            format!(
+                "{}{} — SoundCraft — {}",
+                self.0.engine.session().name,
+                if self.0.engine.is_dirty() { " *" } else { "" },
+                if self.0.ui.window == soundcraft_ui_egui::MainWindow::Edit { "Edit" } else { "Mix" }
+            )
+        } else {
+            format!("{} — SoundCraft", self.0.engine.session().name)
+        };
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -233,7 +254,24 @@ fn main() -> eframe::Result {
             for f in &files {
                 open_path(&mut app, f);
             }
-            Ok(Box::new(App(app, logger)))
+            // If the system menu bar cannot be built, keep the egui menu bar rather than fail to start.
+            #[cfg(target_os = "macos")]
+            let menu = match native_menu::NativeMenu::new(&app, &cc.egui_ctx) {
+                Ok(m) => {
+                    app.native_menu_bar = true;
+                    Some(m)
+                }
+                Err(e) => {
+                    log::warn!("system menu bar unavailable, using the in-window menu bar: {e}");
+                    None
+                }
+            };
+            Ok(Box::new(App(
+                app,
+                logger,
+                #[cfg(target_os = "macos")]
+                menu,
+            )))
         }),
     )
 }
