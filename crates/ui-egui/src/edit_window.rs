@@ -1726,11 +1726,9 @@ fn follow_update(
 /// While playing, auto-scroll keeps the playhead in view for the follow
 /// modes (`page`/`continuous`/`center`) — but any outside view move (a manual
 /// pan, scrollbar, universe jump, or programmatic scroll) pauses it, so the
-/// timeline can be inspected anywhere during playback. Pressing play never
-/// yanks the view: when the playhead starts off-screen the view stays put
-/// until the playhead walks back into it. Scrolling back to the playhead,
-/// stopping, or re-selecting a scrolling mode resumes the follow.
-/// `none` and `after_playback` never scroll during playback.
+/// timeline can be inspected anywhere during playback. Scrolling back to the
+/// playhead, stopping/starting, or re-selecting a scrolling mode resumes the
+/// follow. `none` and `after_playback` never scroll during playback.
 fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
     let t = Tokens::DARK;
     let mut scroll_to: Option<Samples> = None;
