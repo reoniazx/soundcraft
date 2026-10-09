@@ -26,8 +26,9 @@ const BOLD: &[(&str, u32)] = &[
     ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 0),
 ];
 
-#[cfg(not(target_arch = "wasm32"))]
-#[cfg(target_os = "linux")]
+/// Asks fontconfig for the desktop's UI font. Only TrueType/OpenType results are used: egui cannot
+/// read Type 1 or bitmap fonts, which `fc-match` may return on minimal systems.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn load_from_fontconfig(bold: bool) -> Option<FontData> {
     let pattern = if bold { "sans-serif:style=Bold" } else { "sans-serif" };
     let output = std::process::Command::new("fc-match").args(["--format=%{file}\\n%{index}\\n", pattern]).output().ok()?;
@@ -37,8 +38,13 @@ fn load_from_fontconfig(bold: bool) -> Option<FontData> {
     let stdout = String::from_utf8(output.stdout).ok()?;
     let mut lines = stdout.lines();
     let path = lines.next()?.trim();
-    let index = lines.next()?.trim().parse().ok()?;
+    // The upper 16 bits carry a variable font's named instance; the face index is the lower 16.
+    let index = lines.next()?.trim().parse::<u32>().ok()? & 0xFFFF;
     let bytes = std::fs::read(path).ok()?;
+    let sfnt = matches!(bytes.get(..4), Some(b"\0\x01\0\0" | b"OTTO" | b"true" | b"ttcf"));
+    if !sfnt {
+        return None;
+    }
     let mut font = FontData::from_owned(bytes);
     font.index = index;
     Some(font)
@@ -49,10 +55,12 @@ fn load(cands: &[(&str, u32)], bold: bool) -> Option<FontData> {
     if std::env::var_os("SOUNDCRAFT_NO_SYSTEM_FONTS").is_some() {
         return None;
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     if let Some(font) = load_from_fontconfig(bold) {
         return Some(font);
     }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    let _ = bold;
     for (p, idx) in cands {
         if let Ok(bytes) = std::fs::read(p) {
             let mut fd = FontData::from_owned(bytes);
