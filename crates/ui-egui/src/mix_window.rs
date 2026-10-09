@@ -15,7 +15,7 @@ pub fn strip_width(narrow: bool) -> f32 {
 }
 
 pub fn show(app: &mut SoundApp, ui: &mut Ui) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     if app.ui.show_tracks_list {
         egui::Panel::left("mix_tracks_list")
             .exact_size(168.0)
@@ -84,7 +84,7 @@ fn channel_levels(ui: &Ui, key: (&str, u64), peaks: &[f32], n: usize) -> Vec<f32
 }
 
 fn section_label(ui: &Ui, r: Rect, text: &str) {
-    ui.painter().text(pos2(r.center().x, r.min.y + 7.0), Align2::CENTER_CENTER, text, bold(10.0), Color32::from_rgb(200, 200, 200));
+    ui.painter().text(pos2(r.center().x, r.min.y + 7.0), Align2::CENTER_CENTER, text, bold(10.0), Tokens::current().section_label);
 }
 
 fn route_name(app: &SoundApp, r: &Route) -> String {
@@ -97,14 +97,14 @@ fn route_name(app: &SoundApp, r: &Route) -> String {
 }
 
 fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapshot>) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let Some(track) = app.engine.session().track(id).cloned() else { return };
     let narrow = app.ui.narrow_mix;
     let w = strip_width(narrow);
     let h = ui.available_height().max(560.0);
     let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     let selected = app.engine.session().edit.selected_tracks.contains(&id);
-    ui.painter().rect_filled(r, 0.0, if selected { Color32::from_rgb(54, 58, 64) } else { t.strip_bg });
+    ui.painter().rect_filled(r, 0.0, if selected { t.strip_selected } else { t.strip_bg });
     let mut y = r.min.y + 4.0;
     let inner_w = w - 8.0;
     let x0 = r.min.x + 4.0;
@@ -405,7 +405,7 @@ fn strip(app: &mut SoundApp, ui: &mut Ui, id: TrackId, snap: Option<&MeterSnapsh
 /// An instrument track's INSTRUMENT row: click opens a hosted instrument's plugin window,
 /// right-click (or click, when none is set) picks another instrument.
 fn instrument_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, r: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (id, slot) = (track.id, soundcraft_mix::INSTRUMENT_SLOT);
     let ins = track.instrument.as_ref();
     let info = ins.and_then(|i| plugin_info(&i.plugin));
@@ -429,20 +429,20 @@ fn instrument_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, r: Rect) {
 }
 
 fn insert_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let id = track.id;
     let ins = track.mixer.inserts.get(slot).cloned().flatten();
     let resp = ui.interact(r, ui.id().with(("ins", id.0, slot)), Sense::click());
     let fill = match &ins {
-        Some(i) if i.bypass => Color32::from_rgb(70, 56, 30),
-        Some(_) => Color32::from_rgb(52, 62, 80),
+        Some(i) if i.bypass => t.insert_bypass,
+        Some(_) => t.insert_on,
         None => t.slot_bg,
     };
     ui.painter().rect(
         r,
         CornerRadius::same(2),
         if resp.hovered() { fill.gamma_multiply(1.3) } else { fill },
-        Stroke::new(1.0, Color32::from_rgb(16, 16, 16)),
+        Stroke::new(1.0, t.slot_border),
         StrokeKind::Inside,
     );
     let label = ins.as_ref().and_then(|i| plugin_info(&i.plugin)).map_or("", |p| p.short_name);
@@ -604,12 +604,12 @@ pub fn plugin_info(id: &str) -> Option<&'static soundcraft_dsp::PluginInfo> {
 }
 
 fn send_slot(app: &mut SoundApp, ui: &mut Ui, track: &Track, slot: usize, r: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let id = track.id;
     let snd = track.mixer.sends.get(slot).cloned().flatten();
     let resp = ui.interact(r, ui.id().with(("snd", id.0, slot)), Sense::click_and_drag());
-    let fill = if snd.is_some() { Color32::from_rgb(46, 66, 56) } else { t.slot_bg };
-    ui.painter().rect(r, CornerRadius::same(2), fill, Stroke::new(1.0, Color32::from_rgb(16, 16, 16)), StrokeKind::Inside);
+    let fill = if snd.is_some() { t.send_on } else { t.slot_bg };
+    ui.painter().rect(r, CornerRadius::same(2), fill, Stroke::new(1.0, t.slot_border), StrokeKind::Inside);
     match &snd {
         Some(s) => {
             let name = route_name(app, &s.target);

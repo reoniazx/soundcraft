@@ -67,6 +67,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.new_tracks_dialog", "New Tracks…", "", None),
     ("ui.bounce_dialog", "Bounce Mix…", "", None),
     ("ui.set", "Set UI State", "", None),
+    ("ui.theme", "Appearance", "", None),
 ];
 
 /// Extra catalog mappings handled by the UI layer.
@@ -154,37 +155,43 @@ pub struct MenuNode {
     pub children: Vec<MenuNode>,
 }
 
+fn insert_path(roots: &mut Vec<MenuNode>, line: &str) {
+    let parts: Vec<&str> = line.split(" > ").collect();
+    let mut level = roots;
+    let mut path = String::new();
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            path.push_str(" > ");
+        }
+        path.push_str(p);
+        let idx = match level.iter().position(|n| n.label == *p) {
+            Some(i) => i,
+            None => {
+                level.push(MenuNode { label: p.to_string(), path: path.clone(), children: Vec::new() });
+                level.len() - 1
+            }
+        };
+        let Some(node) = level.get_mut(idx) else { break };
+        level = &mut node.children;
+    }
+}
+
 pub fn tree() -> Vec<MenuNode> {
     let mut roots: Vec<MenuNode> = Vec::new();
     for line in catalog::catalog() {
-        let parts: Vec<&str> = line.split(" > ").collect();
-        let mut level = &mut roots;
-        let mut path = String::new();
-        for (i, p) in parts.iter().enumerate() {
-            if i > 0 {
-                path.push_str(" > ");
-            }
-            path.push_str(p);
-            let idx = match level.iter().position(|n| n.label == *p) {
-                Some(i) => i,
-                None => {
-                    level.push(MenuNode { label: p.to_string(), path: path.clone(), children: Vec::new() });
-                    level.len() - 1
-                }
-            };
-            let Some(node) = level.get_mut(idx) else { break };
-            level = &mut node.children;
-        }
+        insert_path(&mut roots, line);
+    }
+    for (path, _) in MENU_WINDOWS {
+        insert_path(&mut roots, path);
     }
     roots
 }
 
 pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
-    let t = crate::theme::Tokens::DARK;
-    egui::Panel::top("menu_bar")
-        .exact_size(24.0)
-        .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(22, 22, 23)).inner_margin(egui::Margin::symmetric(8, 2)))
-        .show(ui, |ui| {
+    let t = crate::theme::Tokens::current();
+    egui::Panel::top("menu_bar").exact_size(24.0).frame(egui::Frame::NONE.fill(t.menu_bar).inner_margin(egui::Margin::symmetric(8, 2))).show(
+        ui,
+        |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("SoundCraft", |ui| {
                     if ui.button("About SoundCraft").clicked() {
@@ -220,7 +227,8 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     ui.label(egui::RichText::new(title).color(t.text_dim));
                 });
             });
-        });
+        },
+    );
 }
 
 fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str, &str)]) {
@@ -349,6 +357,7 @@ fn params_for(path: &str, id: &str) -> Value {
 
 /// Menu items that open a SoundCraft window when clicked (programmatic calls still run the command).
 const MENU_WINDOWS: &[(&str, &str)] = &[
+    ("Setup > Appearance", "window.ui_customization"),
     ("Setup > Hardware...", "window.playback_engine"),
     ("Setup > Playback Engine...", "window.playback_engine"),
     ("Setup > I/O...", "window.io_setup"),
@@ -512,6 +521,19 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "ui.bounce_dialog" => {
             let _ = app.dialogs.open_for_command(&app.engine, "file.bounce_mix");
             json!({})
+        }
+        "ui.theme" => {
+            let Some(mode) = p.get("mode").and_then(Value::as_str) else {
+                return Some(Ok(json!({"mode": app.ui.theme.id()})));
+            };
+            let Some(mode) = crate::theme::ThemeMode::parse(mode) else {
+                return Some(Err(format!("unknown theme `{mode}` (system, light or dark)")));
+            };
+            if mode == crate::theme::ThemeMode::System {
+                crate::theme::refresh_system();
+            }
+            app.ui.theme = mode;
+            json!({"mode": mode.id()})
         }
         "ui.set" => match serde_json::to_value(&app.ui) {
             Ok(mut cur) => {
