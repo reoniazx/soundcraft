@@ -324,10 +324,13 @@ impl SoundApp {
         }
         self.engine.transport.playing = true;
         self.engine.transport.position = from;
-        // A fresh start resumes the playhead follow: clear a manual hold and
-        // re-sync the follow tracker so the current view is not mistaken for
-        // an outside move on the first frame.
-        self.edit_layout.follow_hold = false;
+        // A fresh start does not yank the view: hold the follow until the
+        // first overlay frame decides. If the playhead is already on-screen
+        // the hold clears at once and the follow runs as usual; if it is
+        // off-screen the view stays where it is until the playhead walks
+        // back into view. The tracker is re-synced so the current view is
+        // not mistaken for an outside move on that first frame.
+        self.edit_layout.follow_hold = true;
         self.edit_layout.last_scroll = self.engine.session().edit.zoom.scroll;
         self.edit_layout.last_follow_to = None;
     }
