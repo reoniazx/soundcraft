@@ -1378,6 +1378,20 @@ fn clip_at(track: &Track, at: Samples) -> Option<&Clip> {
 fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, tl: Rect) {
     let id = ui.id().with(("lane", track.id.0));
     let resp = ui.interact(lane, id, Sense::click_and_drag());
+    // The clip menu is attached before the early return below: once the menu is open the pointer
+    // is over the popup, the lane has no hover position, and the rest of this function bails out.
+    // The clip is remembered at the right-click so the menu keeps its target while it is used.
+    let menu_clip_id = id.with("menu_clip");
+    if resp.secondary_clicked() {
+        let clip = resp.interact_pointer_pos().and_then(|p| {
+            let s = app.engine.session();
+            clip_at(track, sample_at(s, tl, p.x).max(0)).map(|c| c.id)
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(menu_clip_id, clip));
+    }
+    // The clip may have been removed or moved since the right-click; only use it if it still exists.
+    let menu_clip = ui.ctx().data(|d| d.get_temp::<Option<ClipId>>(menu_clip_id)).flatten().filter(|c| track.clips().iter().any(|x| x.id == *c));
+    resp.context_menu(|ui| clip_context_menu(app, ui, menu_clip));
     // Audio files dropped from the Clip List.
     if let Some(src) = resp.dnd_release_payload::<crate::DragSource>()
         && let Some(p) = ui.ctx().pointer_latest_pos()
@@ -1619,7 +1633,6 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     {
         let _ = app.run("edit.select", json!({"clips": [c.id.0]}));
     }
-    resp.context_menu(|ui| clip_context_menu(app, ui, hit.as_ref().map(|c| c.id)));
 }
 
 fn automation_id(p: &AutoParam) -> String {
