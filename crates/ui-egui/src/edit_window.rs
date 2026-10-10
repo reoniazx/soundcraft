@@ -1397,7 +1397,7 @@ pub fn clip_gain_icon(s: &Session, tl: Rect, lane: Rect, clip: &Clip) -> Option<
 }
 
 fn clip_gain_popup(ctx: &egui::Context, fader_bottom: Pos2, pos: f32) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("clip_gain_fader")));
     let track = Rect::from_min_max(pos2(fader_bottom.x - 2.0, fader_bottom.y - CLIP_FADER_TRAVEL), pos2(fader_bottom.x + 2.0, fader_bottom.y));
     let panel = Rect::from_min_max(pos2(track.min.x - 22.0, track.min.y - 26.0), pos2(track.max.x + 22.0, track.max.y + 8.0));
