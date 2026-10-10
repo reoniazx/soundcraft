@@ -74,27 +74,39 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
 /// Extra catalog mappings handled by the UI layer.
 pub fn ui_aliases() -> Vec<(&'static str, &'static str)> {
     let mut v: Vec<(&str, &str)> = UI_COMMANDS.iter().filter(|c| !c.2.is_empty()).map(|c| (c.2, c.0)).collect();
-    for sec in [
-        "Inserts A-E",
-        "Inserts F-J",
-        "Sends A-E",
-        "Sends F-J",
-        "I/O",
-        "Track Color",
-        "Comments",
-        "EQ Curve",
-        "Meters and Faders",
-        "All",
-        "Minimal",
-        "Mic Preamps",
-        "Instruments",
-        "Object",
-    ] {
-        v.push((Box::leak(format!("View > Mix Window Views > {sec}").into_boxed_str()), "view.mix_section"));
-    }
+    v.extend(mix_view_aliases().iter().copied());
     v.extend(AUDIOSUITE.iter().map(|(p, _)| (*p, "audiosuite.process")));
     v.extend(MENU_WINDOWS.iter().copied());
     v
+}
+
+/// Mix-view menu paths, allocated once. Rebuilding them on every menu draw leaked a copy per frame.
+fn mix_view_aliases() -> &'static [(&'static str, &'static str)] {
+    static ALIASES: std::sync::OnceLock<Vec<(&'static str, &'static str)>> = std::sync::OnceLock::new();
+    ALIASES.get_or_init(|| {
+        [
+            "Inserts A-E",
+            "Inserts F-J",
+            "Sends A-E",
+            "Sends F-J",
+            "I/O",
+            "Track Color",
+            "Comments",
+            "EQ Curve",
+            "Meters and Faders",
+            "All",
+            "Minimal",
+            "Mic Preamps",
+            "Instruments",
+            "Object",
+        ]
+        .into_iter()
+        .map(|sec| {
+            let path: &'static str = Box::leak(format!("View > Mix Window Views > {sec}").into_boxed_str());
+            (path, "view.mix_section")
+        })
+        .collect()
+    })
 }
 
 /// AudioSuite catalog entries → our processes (functional equivalents, our own plugins).
@@ -545,9 +557,6 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
             let Some(mode) = crate::theme::ThemeMode::parse(mode) else {
                 return Some(Err(format!("unknown theme `{mode}` (system, light or dark)")));
             };
-            if mode == crate::theme::ThemeMode::System {
-                crate::theme::refresh_system();
-            }
             app.ui.theme = mode;
             json!({"mode": mode.id()})
         }
@@ -578,10 +587,21 @@ pub fn parity() -> Value {
     let extra = ui_aliases();
     catalog::parity_with(&extra)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Services, SoundApp};
+
+    #[test]
+    fn mix_view_aliases_are_allocated_once() {
+        let first = ui_aliases();
+        let second = ui_aliases();
+        let a = first.iter().find(|(path, _)| path.contains("Mix Window Views > All")).map(|(path, _)| *path).unwrap();
+        let b = second.iter().find(|(path, _)| path.contains("Mix Window Views > All")).map(|(path, _)| *path).unwrap();
+        assert!(std::ptr::eq(a, b));
+        assert_eq!(first.iter().filter(|(path, _)| path.contains("Mix Window Views")).count(), 14);
+    }
 
     #[test]
     fn programmatic_dialog_commands_stay_closed_and_the_menu_opens_them() {
