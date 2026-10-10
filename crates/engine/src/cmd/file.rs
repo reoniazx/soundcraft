@@ -11,8 +11,8 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "session.new", "New...", ["File"], Some("Cmd+N"), "{name?: 'Untitled', sample_rate?: 48000, bit_depth?: 24, template?: blank|demo}", always, new_session),
         cmd!(noundo "session.open", "Open Session...", ["File"], Some("Cmd+O"), "{path}", always, |e, p| {
             let path = str_param(p, "path").ok_or_else(|| bad("session.open", "`path` required"))?.to_string();
-            crate::io::open_session(e, &path)?;
-            Ok(json!({"name": e.session().name, "tracks": e.session().tracks.len()}))
+            let missing = crate::io::open_session(e, &path)?;
+            Ok(json!({"name": e.session().name, "tracks": e.session().tracks.len(), "missing": missing}))
         }),
         cmd!(noundo "session.close", "Close Session", ["File"], Some("Cmd+Shift+W"), "{}", always, |e, _| { e.replace_session(Session::default()); e.path = None; Ok(json!({})) }),
         cmd!(noundo "session.save", "Save Session", ["File"], Some("Cmd+S"), "{path?}", always, |e, p| {
@@ -248,11 +248,10 @@ fn bounce(e: &mut Engine, p: &Value) -> Result<Value> {
     let r = range_param(e, "file.bounce_mix", p)?;
     let r = if r.is_empty() { soundcraft_time::Range::new(0, e.session().content_end().max(1)) } else { r };
     let ext = std::path::Path::new(&path).extension().and_then(|x| x.to_str()).unwrap_or("wav").to_ascii_lowercase();
-    let format = match str_param(p, "format").unwrap_or(ext.as_str()) {
-        "aif" | "aiff" => soundcraft_audio_io::FileFormat::Aiff,
-        "flac" => soundcraft_audio_io::FileFormat::Flac,
-        _ => soundcraft_audio_io::FileFormat::Wav,
-    };
+    let format_name = str_param(p, "format").unwrap_or(ext.as_str());
+    let format = soundcraft_audio_io::encode_format_for(format_name).ok_or_else(|| {
+        bad("file.bounce_mix", format!("cannot write `{format_name}` files (supported: {})", soundcraft_audio_io::ENCODE_EXTENSIONS))
+    })?;
     let bit_depth = match p.get("bit_depth").map(|b| b.to_string().trim_matches('"').to_string()).as_deref() {
         Some("16") => soundcraft_audio_io::BitDepth::Int16,
         Some("32") | Some("32f") => soundcraft_audio_io::BitDepth::Float32,
@@ -348,5 +347,47 @@ mod tests {
         assert_eq!(e.session().tracks[0].format, ChannelFormat::Mono);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bounce_refuses_formats_it_cannot_write() {
+        let mut e = Engine::default();
+        let dir = std::env::temp_dir().join(format!("sc-bounce-ext-{}", std::process::id()));
+        assert!(std::fs::create_dir_all(&dir).is_ok());
+        for name in ["mix.mp3", "mix.ogg", "mix.xyz"] {
+            let path = dir.join(name);
+            let err = e.execute("file.bounce_mix", &json!({"path": path.to_string_lossy(), "start": 0, "end": 480})).map(|_| ()).unwrap_err();
+            assert!(err.to_string().contains("supported: wav"), "{name}: {err}");
+            assert!(!path.exists(), "{name} must not be written");
+        }
+        let ok = dir.join("mix.flac");
+        assert!(e.execute("file.bounce_mix", &json!({"path": ok.to_string_lossy(), "start": 0, "end": 480})).is_ok());
+        assert!(std::fs::remove_dir_all(&dir).is_ok());
+    }
+
+    fn remove_media(dir: &std::path::Path) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                remove_media(&p);
+            } else if p.extension().is_some_and(|x| x != "scraft") {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+
+    #[test]
+    fn session_open_reports_missing_media() {
+        let mut e = crate::demo::demo_engine();
+        let dir = std::env::temp_dir().join(format!("soundcraft-open-missing-{}", std::process::id()));
+        let path = dir.join("Gone.scraft").to_string_lossy().into_owned();
+        e.execute("session.save_as", &json!({"path": path})).unwrap();
+        let mut ok = Engine::default();
+        assert!(ok.execute("session.open", &json!({"path": path})).unwrap()["missing"].as_array().is_some_and(Vec::is_empty));
+        remove_media(&dir);
+        let mut r = Engine::default();
+        let res = r.execute("session.open", &json!({"path": path})).unwrap();
+        assert!(res["missing"].as_array().is_some_and(|m| !m.is_empty()), "{res}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

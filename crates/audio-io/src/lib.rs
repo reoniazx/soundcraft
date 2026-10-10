@@ -257,6 +257,19 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
     }
 }
 
+/// Formats [`encode`] can write, as the extensions that name them.
+pub const ENCODE_EXTENSIONS: &str = "wav, aif, aiff, flac";
+
+/// The format [`encode`] writes for a file extension or format name (`wav`, `aiff`, `flac`, case-insensitive), or `None` when it cannot write it.
+pub fn encode_format_for(name: &str) -> Option<FileFormat> {
+    match name.trim_start_matches('.').to_ascii_lowercase().as_str() {
+        "wav" | "wave" | "bwf" => Some(FileFormat::Wav),
+        "aif" | "aiff" => Some(FileFormat::Aiff),
+        "flac" => Some(FileFormat::Flac),
+        _ => None,
+    }
+}
+
 /// Encode a WAV file in the RF64 layout regardless of size (normally used only above 4 GiB).
 pub fn encode_wav_rf64(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
     wav::encode(buf, opts.bit_depth, opts.dither, opts.bwf.as_ref(), true, None)
