@@ -68,6 +68,8 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("clip.loop", "Loop...", ["Clip"], Some("Cmd+Alt+L"), "{clips?, count?: n, length?: samples}", has_selection, loop_clips),
         cmd!("clip.rename", "Rename...", ["Clip"], Some("Cmd+Alt+Shift+R"), "{clip?, name}", has_selection, rename),
         cmd!("clip.gain", "Clip Gain", [], None, "{clips?, db | delta_db}", has_selection, gain),
+        cmd!("clip.gain_nudge_up", "Nudge Clip Gain Up", [], Some("Ctrl+Shift+Up"), "{clips?}", has_selection, |e, p| nudge_gain(e, p, 1.0)),
+        cmd!("clip.gain_nudge_down", "Nudge Clip Gain Down", [], Some("Ctrl+Shift+Down"), "{clips?}", has_selection, |e, p| nudge_gain(e, p, -1.0)),
         cmd!("clip.gain_render", "Render", ["Clip", "Clip Gain"], None, "{clips?}", has_selection, |e, p| {
             let ids = clip_ids_param(e, p);
             let mut n = 0;
@@ -326,6 +328,11 @@ fn gain(e: &mut Engine, p: &Value) -> Result<Value> {
     Ok(json!({"clips": ids.len()}))
 }
 
+fn nudge_gain(e: &mut Engine, p: &Value, db: f64) -> Result<Value> {
+    let clips = clip_ids_param(e, p);
+    gain(e, &json!({"clips": clips, "delta_db": db}))
+}
+
 fn quantize_to_grid(e: &mut Engine, p: &Value) -> Result<Value> {
     let ids = clip_ids_param(e, p);
     let s = e.session();
@@ -364,5 +371,20 @@ mod tests {
         assert!((c.length as f64 - len0 as f64 * 0.5).abs() < 2.0);
         e.execute("clip.remove_warp", &json!({"clips": [cid]})).unwrap();
         assert_eq!(e.session().find_clip(ClipId(cid)).unwrap().1.length, len0);
+    }
+
+    #[test]
+    fn gain_nudges_one_db_at_a_time_up_to_the_ceiling() {
+        let mut e = crate::demo::demo_engine();
+        let kick = e.session().track_by_name("Kick").unwrap().clips()[0].id;
+        let gain = |e: &crate::Engine| e.session().find_clip(kick).unwrap().1.gain_db;
+        e.execute("edit.select", &json!({"clips": [kick.0]})).unwrap();
+        e.execute("clip.gain_nudge_up", &json!({})).unwrap();
+        e.execute("clip.gain_nudge_up", &json!({})).unwrap();
+        e.execute("clip.gain_nudge_down", &json!({})).unwrap();
+        assert_eq!(gain(&e), 1.0);
+        e.execute("clip.gain", &json!({"db": 35.5})).unwrap();
+        e.execute("clip.gain_nudge_up", &json!({})).unwrap();
+        assert_eq!(gain(&e), 36.0);
     }
 }

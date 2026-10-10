@@ -165,7 +165,7 @@ fn fixed(app: &mut SoundApp, key: Key, m: Modifiers, mac: bool) -> bool {
             }
             true
         }
-        Key::ArrowUp | Key::ArrowDown if m.ctrl => {
+        Key::ArrowUp | Key::ArrowDown if m.ctrl && !m.shift => {
             let id = if key == Key::ArrowUp { "edit.extend_selection_up" } else { "edit.extend_selection_down" };
             let _ = app.run(id, json!({}));
             true

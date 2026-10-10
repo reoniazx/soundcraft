@@ -187,6 +187,7 @@ pub enum Gesture {
     Fade { clip: soundcraft_model::ClipId, track: TrackId, fade_in: bool, to: Samples },
     Scrub { last: Samples },
     Fader { track: TrackId, start_db: f32 },
+    ClipGain { clip: soundcraft_model::ClipId, track: TrackId, pos: f32, anchor: (f32, f32), fine: bool, fader_bottom: egui::Pos2 },
     Pencil { track: TrackId, points: Vec<(Samples, f32)> },
     ZoomBox { start: f32 },
 }

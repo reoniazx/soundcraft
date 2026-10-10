@@ -172,6 +172,17 @@ pub fn meter_pos(db: f32) -> f32 {
     }
 }
 
+/// Clip gain fader taper: the top three quarters span -36..+36 dB evenly, the rest compresses to -144.
+pub fn clip_gain_from_pos(pos: f32) -> f32 {
+    let p = if pos.is_finite() { pos.clamp(0.0, 1.0) } else { 0.0 };
+    if p >= 0.25 { -36.0 + (p - 0.25) / 0.75 * 72.0 } else { -36.0 - (1.0 - p / 0.25).powf(1.5) * 108.0 }
+}
+
+pub fn clip_gain_to_pos(db: f32) -> f32 {
+    let db = if db.is_finite() { db.clamp(-144.0, 36.0) } else { -144.0 };
+    if db >= -36.0 { 0.25 + (db + 36.0) / 72.0 * 0.75 } else { (1.0 - ((-36.0 - db) / 108.0).powf(1.0 / 1.5)) * 0.25 }
+}
+
 /// A fader: returns the new dB value when dragged. `db` in -144..12.
 pub fn fader(ui: &mut Ui, r: Rect, db: f32, id: egui::Id) -> Option<f32> {
     let t = Tokens::current();
@@ -341,6 +352,22 @@ pub fn multi_meter(ui: &Ui, r: Rect, levels: &[f32], labels: &[String], clip: bo
             // Rotated 90° anticlockwise, reading bottom-to-top, centred under the bar.
             let pos = pos2(br.center().x - gh * 0.5, mr.max.y + 2.0 + gw.min(label_h - 2.0));
             ui.painter().add(egui::epaint::TextShape::new(pos, galley, Tokens::current().text_dim).with_angle(-std::f32::consts::FRAC_PI_2));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clip_gain_from_pos, clip_gain_to_pos};
+
+    #[test]
+    fn clip_gain_taper_spans_minus_144_to_plus_36_and_round_trips() {
+        assert_eq!(clip_gain_from_pos(0.0), -144.0);
+        assert_eq!(clip_gain_from_pos(1.0), 36.0);
+        assert_eq!(clip_gain_from_pos(f32::NAN), -144.0);
+        assert_eq!(clip_gain_to_pos(f32::INFINITY), 0.0);
+        for db in [-144.0, -90.0, -36.0, -12.5, 0.0, 6.0, 36.0] {
+            assert!((clip_gain_from_pos(clip_gain_to_pos(db)) - db).abs() < 0.01, "{db}");
         }
     }
 }
