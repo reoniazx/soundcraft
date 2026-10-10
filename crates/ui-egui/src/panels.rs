@@ -7,7 +7,7 @@ use serde_json::json;
 use soundcraft_time::format_position;
 
 fn panel_header(ui: &mut Ui, title: &str) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
     ui.painter().rect_filled(r, 0.0, t.panel_bg2);
     ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, title, bold(11.5), t.header_text);
@@ -15,7 +15,7 @@ fn panel_header(ui: &mut Ui, title: &str) {
 }
 
 pub fn tracks_and_groups(app: &mut SoundApp, ui: &mut Ui) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let total = ui.available_height();
     panel_header(ui, "TRACKS");
     let tracks: Vec<(u64, String, bool, [u8; 3], bool)> = {
@@ -26,16 +26,11 @@ pub fn tracks_and_groups(app: &mut SoundApp, ui: &mut Ui) {
         for (id, name, shown, color, sel) in tracks {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 17.0), Sense::click());
             if sel {
-                ui.painter().rect_filled(r, 0.0, Color32::from_rgb(52, 70, 96));
+                ui.painter().rect_filled(r, 0.0, t.row_selected);
             }
             let dot = Rect::from_center_size(pos2(r.min.x + 10.0, r.center().y), vec2(8.0, 8.0));
             let dresp = ui.interact(dot.expand(3.0), ui.id().with(("vis", id)), Sense::click());
-            ui.painter().circle(
-                dot.center(),
-                3.5,
-                if shown { Color32::from_rgb(200, 200, 200) } else { Color32::TRANSPARENT },
-                Stroke::new(1.0, t.text_dim),
-            );
+            ui.painter().circle(dot.center(), 3.5, if shown { t.visible_dot } else { Color32::TRANSPARENT }, Stroke::new(1.0, t.text_dim));
             if dresp.clicked() {
                 let _ = app.run("track.hide", json!({"tracks": [id], "hidden": shown}));
             }
@@ -103,7 +98,7 @@ pub fn tracks_and_groups(app: &mut SoundApp, ui: &mut Ui) {
 }
 
 pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     panel_header(ui, "CLIPS");
     let items: Vec<(Option<u64>, String, bool, [u8; 3])> = {
         let s = app.engine.session();
@@ -150,7 +145,7 @@ pub fn clip_list(app: &mut SoundApp, ui: &mut Ui) {
                 }
             }
             if !whole && id.is_some_and(|i| selected.contains(&i)) {
-                ui.painter().rect_filled(r, 0.0, Color32::from_rgb(52, 70, 96));
+                ui.painter().rect_filled(r, 0.0, t.row_selected);
             }
             ui.painter().rect_filled(Rect::from_min_size(pos2(r.min.x + 6.0, r.min.y + 4.0), vec2(9.0, 9.0)), 1.0, rgb(color));
             ui.painter().with_clip_rect(r).text(
@@ -186,7 +181,7 @@ fn transport_window(app: &mut SoundApp, ctx: &egui::Context) {
     if !open {
         return;
     }
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     egui::Window::new("Transport").open(&mut open).resizable(false).default_pos(pos2(400.0, 500.0)).show(ctx, |ui| {
         let flags = app.engine.session().edit.flags.clone();
         let expanded = flags.contains("view.transport.expanded");
@@ -275,8 +270,9 @@ fn big_counter(app: &mut SoundApp, ctx: &egui::Context) {
         let s = app.engine.session();
         let txt = format_position(app.position(), s.edit.main_counter, s.sample_rate, &s.tempo, s.frame_rate, s.timecode_start);
         let r = ui.available_rect_before_wrap();
-        ui.painter().rect_filled(r, 4.0, Color32::BLACK);
-        ui.painter().text(r.center(), Align2::CENTER_CENTER, txt, mono((r.height() * 0.6).clamp(20.0, 120.0)), Tokens::DARK.counter_text);
+        let t = Tokens::current();
+        ui.painter().rect_filled(r, 4.0, t.big_counter_bg);
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, txt, mono((r.height() * 0.6).clamp(20.0, 120.0)), t.counter_text);
     });
     app.ui.show_big_counter = open;
 }
@@ -362,7 +358,7 @@ fn undo_history(app: &mut SoundApp, ctx: &egui::Context) {
                 }
             }
             if let Some(r) = app.engine.redo_label() {
-                ui.label(egui::RichText::new(format!("(redo) {r}")).italics().color(Tokens::DARK.text_dim));
+                ui.label(egui::RichText::new(format!("(redo) {r}")).italics().color(Tokens::current().text_dim));
             }
         });
     });
@@ -373,26 +369,33 @@ fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
     let wins = app.ui.plugin_windows.clone();
     let mut keep = Vec::new();
     for (tid, slot) in wins {
-        let Some((tname, ins)) =
-            app.engine.session().track(tid).and_then(|t| t.mixer.inserts.get(slot).cloned().flatten().map(|i| (t.name.clone(), i)))
-        else {
+        // The instrument slot (an instrument track's instrument) or an insert slot.
+        let instrument = slot == soundcraft_mix::INSTRUMENT_SLOT;
+        let Some((tname, ins)) = app.engine.session().track(tid).and_then(|t| {
+            let ins = if instrument { t.instrument.clone() } else { t.mixer.inserts.get(slot).cloned().flatten() };
+            ins.map(|i| (t.name.clone(), i))
+        }) else {
             continue;
         };
         let Some(info) = crate::mix_window::plugin_info(&ins.plugin) else { continue };
+        let place = if instrument { "instrument".to_string() } else { char::from(b'a'.saturating_add(slot as u8)).to_string() };
         let mut open = true;
-        egui::Window::new(format!("{tname} · {} · {}", (b'a' + slot as u8) as char, info.name))
+        egui::Window::new(format!("{tname} · {place} · {}", info.name))
             .id(egui::Id::new(("plugin", tid.0, slot)))
             .open(&mut open)
             .default_width(340.0)
             .default_pos(egui::pos2(ctx.content_rect().width() - 380.0, 120.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&ins.preset).color(Tokens::DARK.text_dim));
-                    let label = if ins.bypass { "BYPASSED" } else { "Bypass" };
-                    if ui.button(label).clicked() {
-                        let _ = app.run("mix.insert_bypass", json!({"track": tid.0, "slot": slot}));
+                    // Bypass and presets act on insert slots.
+                    if !instrument {
+                        ui.label(egui::RichText::new(&ins.preset).color(Tokens::current().text_dim));
+                        let label = if ins.bypass { "BYPASSED" } else { "Bypass" };
+                        if ui.button(label).clicked() {
+                            let _ = app.run("mix.insert_bypass", json!({"track": tid.0, "slot": slot}));
+                        }
+                        ui.menu_button("Presets ▾", |ui| preset_menu(app, ui, tid, slot, info, &ins));
                     }
-                    ui.menu_button("Presets ▾", |ui| preset_menu(app, ui, tid, slot, info, &ins));
                     if soundcraft_mix::is_third_party(&ins.plugin) {
                         let open = app.player.as_ref().is_some_and(|p| p.editor_open(tid, slot));
                         let available = app.player.as_ref().is_some_and(|p| p.has_editor(tid, slot));
@@ -411,6 +414,12 @@ fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
                         }
                     }
                 });
+                if instrument {
+                    // The parameter commands address insert slots: an instrument is played and
+                    // edited in its own editor.
+                    ui.label(egui::RichText::new("Load and edit sounds in the plugin's own editor.").color(Tokens::current().text_dim));
+                    return;
+                }
                 if info.id == "eq_7band" || info.id == "eq_1band" {
                     eq_curve(ui, info.id, &ins);
                 }
@@ -462,7 +471,7 @@ fn plugin_windows(app: &mut SoundApp, ctx: &egui::Context) {
 }
 
 fn eq_curve(ui: &mut Ui, id: &str, ins: &soundcraft_model::Insert) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width().max(300.0), 110.0), Sense::hover());
     ui.painter().rect_filled(r, 4.0, Color32::from_rgb(14, 18, 22));
     let n = 160;
