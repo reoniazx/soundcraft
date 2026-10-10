@@ -94,6 +94,8 @@ pub struct UiState {
     pub video_burn_in: bool,
     pub workspace_dir: String,
     pub configurations: Vec<(String, Value)>,
+    /// Appearance (`ui.theme`): dark by default, light or follow the system on request.
+    pub theme: theme::ThemeMode,
 }
 
 impl Default for UiState {
@@ -142,6 +144,7 @@ impl Default for UiState {
             video_burn_in: false,
             workspace_dir: String::new(),
             configurations: Vec::new(),
+            theme: theme::ThemeMode::Dark,
         }
     }
 }
@@ -197,6 +200,8 @@ pub struct SoundApp {
     recorder_failed: bool,
     pub ui: UiState,
     pub services: Services,
+    /// Set only by a desktop host after installing an OS menu bar.
+    pub native_menu_bar: bool,
     /// Folder for crash-recovery autosaves (native apps set it).
     pub autosave_dir: Option<std::path::PathBuf>,
     /// Folder for user plugin presets (native apps set it).
@@ -218,6 +223,8 @@ pub struct SoundApp {
     last_rev: u64,
     fonts_ready: bool,
     fonts_installed: bool,
+    /// The palette last applied to the context (light?), so visuals are set only on a change.
+    theme_applied: Option<bool>,
     /// Transport simulation when there is no player (tests, offscreen renders).
     sim: Option<(Samples, Option<Samples>, Option<Range>)>,
     pub quit_requested: bool,
@@ -232,6 +239,16 @@ pub struct SoundApp {
     pub video: video_track::VideoPool,
 }
 
+/// Whether another automation-write pass is due: the transport moved at least
+/// `step` since `last` in either direction. `last == i64::MIN` marks "never
+/// written", so the first pass after (re)start is always due. Saturating
+/// arithmetic keeps restarts and loop wraps overflow-free: the previous
+/// `(pos - last).abs()` panicked in debug builds on the first playing frame,
+/// when `last` is still `i64::MIN`.
+fn automation_step_due(pos: Samples, last: Samples, step: Samples) -> bool {
+    last == i64::MIN || pos.saturating_sub(last) >= step || last.saturating_sub(pos) >= step
+}
+
 impl SoundApp {
     pub fn new(engine: Engine, player: Option<Player>, services: Services) -> Self {
         SoundApp {
@@ -243,6 +260,7 @@ impl SoundApp {
             recorder_failed: false,
             ui: UiState::default(),
             services,
+            native_menu_bar: false,
             autosave_dir: None,
             preset_dir: None,
             last_autosave: 0.0,
@@ -262,6 +280,7 @@ impl SoundApp {
             last_rev: 0,
             fonts_ready: false,
             fonts_installed: false,
+            theme_applied: None,
             sim: None,
             quit_requested: false,
             arrange_request: false,
@@ -292,6 +311,10 @@ impl SoundApp {
                 if id == "app.quit" {
                     self.quit_requested = true;
                 }
+                if id == "options.scrolling" {
+                    // Re-selecting a scrolling mode resumes the playhead follow.
+                    self.edit_layout.follow_hold = false;
+                }
                 Ok(v)
             }
             Err(e) => {
@@ -320,6 +343,12 @@ impl SoundApp {
         }
         self.engine.transport.playing = true;
         self.engine.transport.position = from;
+        // A fresh start resumes the playhead follow: clear a manual hold and
+        // re-sync the follow tracker so the current view is not mistaken for
+        // an outside move on the first frame.
+        self.edit_layout.follow_hold = false;
+        self.edit_layout.last_scroll = self.engine.session().edit.zoom.scroll;
+        self.edit_layout.last_follow_to = None;
     }
 
     fn stop_play(&mut self) {
@@ -332,11 +361,33 @@ impl SoundApp {
         self.sim = None;
         self.engine.transport.playing = false;
         self.engine.transport.recording = false;
-        let s = self.engine.session();
-        if s.edit.insertion_follows_playback {
+        let stop_at = self.engine.transport.position;
+        // Snapshot the session flags first: `session_mut` below needs a
+        // mutable borrow, so no session borrow may span it.
+        let (follow_insertion, after_playback) = {
+            let s = self.engine.session();
+            (s.edit.insertion_follows_playback, s.edit.scrolling == "after_playback")
+        };
+        if follow_insertion {
             let pos = self.engine.transport.position;
             self.engine.session_mut().edit.selection = Range::point(pos);
         }
+        if after_playback {
+            // After Playback never scrolls while playing, so bring the stopped
+            // position into view now (only if it is off-screen); every other
+            // mode keeps its view.
+            let at = stop_at.max(0);
+            let (scroll, spp) = {
+                let z = &self.engine.session().edit.zoom;
+                (z.scroll, z.samples_per_px.max(0.01))
+            };
+            let width = f64::from(self.edit_layout.timeline[2] - self.edit_layout.timeline[0]).max(0.0);
+            let end = scroll.saturating_add((width * spp) as Samples);
+            if at < scroll || at >= end {
+                let _ = self.engine.execute("view.scroll", &json!({ "to": at }));
+            }
+        }
+        self.edit_layout.follow_hold = false;
     }
 
     fn start_recording(&mut self) {
@@ -531,7 +582,7 @@ impl SoundApp {
         }
         let pos = self.position();
         let step = self.engine.session().sample_rate.samples(0.02);
-        if (pos - self.last_write_at).abs() < step {
+        if !automation_step_due(pos, self.last_write_at, step) {
             return;
         }
         self.last_write_at = pos;
@@ -681,10 +732,14 @@ impl SoundApp {
                 self.fonts_ready = true;
             } else {
                 fonts::install(ctx);
-                theme::apply(ctx);
                 self.fonts_installed = true;
                 ctx.request_repaint();
             }
+        }
+        let light = theme::wants_light(ctx, self.ui.theme);
+        if self.theme_applied != Some(light) || theme::is_light() != light {
+            theme::apply(ctx, light);
+            self.theme_applied = Some(light);
         }
         let now = ctx.input(|i| i.time);
         let dt = self.last_frame.map_or(1.0 / 60.0, |t| (now - t) as f32).clamp(0.0, 0.25);
@@ -767,7 +822,9 @@ impl SoundApp {
             ctx.memory_mut(|m| m.reset_areas());
         }
         shortcuts::handle(self, &ctx);
-        menus::menu_bar(self, ui);
+        if !self.native_menu_bar {
+            menus::menu_bar(self, ui);
+        }
         match self.ui.window {
             MainWindow::Edit => edit_window::show(self, ui),
             MainWindow::Mix => mix_window::show(self, ui),
@@ -823,4 +880,28 @@ fn feed_meter(d: &mut MeterDisplay, peak: [f32; 2], gr: f32, dt: f32) {
         d.hold = d.level;
     }
     d.gr = if gr > d.gr { gr } else { d.gr * fall };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::automation_step_due;
+
+    #[test]
+    fn automation_first_pass_after_start_is_due_without_overflow() {
+        // `last_write_at` starts (and resets) at `i64::MIN`: the previous
+        // `(pos - last).abs()` panicked here in debug builds.
+        assert!(automation_step_due(0, i64::MIN, 960));
+        assert!(automation_step_due(48_000, i64::MIN, 960));
+    }
+
+    #[test]
+    fn automation_write_throttles_to_step() {
+        assert!(!automation_step_due(1_000, 900, 960));
+        assert!(automation_step_due(2_000, 900, 960));
+    }
+
+    #[test]
+    fn automation_write_fires_after_loop_wrap() {
+        assert!(automation_step_due(0, 1_000_000, 960));
+    }
 }

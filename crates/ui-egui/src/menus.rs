@@ -67,6 +67,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
     ("ui.new_tracks_dialog", "New Tracks…", "", None),
     ("ui.bounce_dialog", "Bounce Mix…", "", None),
     ("ui.set", "Set UI State", "", None),
+    ("ui.theme", "Appearance", "", None),
 ];
 
 /// Extra catalog mappings handled by the UI layer.
@@ -147,43 +148,50 @@ const DIALOG_COMMANDS: &[&str] = &[
     "edit.strip_silence",
 ];
 
-struct MenuNode {
-    label: String,
-    path: String,
-    children: Vec<MenuNode>,
+/// Shared menu hierarchy for egui and native desktop hosts.
+pub struct MenuNode {
+    pub label: String,
+    pub path: String,
+    pub children: Vec<MenuNode>,
 }
 
-fn tree() -> Vec<MenuNode> {
+fn insert_path(roots: &mut Vec<MenuNode>, line: &str) {
+    let parts: Vec<&str> = line.split(" > ").collect();
+    let mut level = roots;
+    let mut path = String::new();
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            path.push_str(" > ");
+        }
+        path.push_str(p);
+        let idx = match level.iter().position(|n| n.label == *p) {
+            Some(i) => i,
+            None => {
+                level.push(MenuNode { label: p.to_string(), path: path.clone(), children: Vec::new() });
+                level.len() - 1
+            }
+        };
+        let Some(node) = level.get_mut(idx) else { break };
+        level = &mut node.children;
+    }
+}
+
+pub fn tree() -> Vec<MenuNode> {
     let mut roots: Vec<MenuNode> = Vec::new();
     for line in catalog::catalog() {
-        let parts: Vec<&str> = line.split(" > ").collect();
-        let mut level = &mut roots;
-        let mut path = String::new();
-        for (i, p) in parts.iter().enumerate() {
-            if i > 0 {
-                path.push_str(" > ");
-            }
-            path.push_str(p);
-            let idx = match level.iter().position(|n| n.label == *p) {
-                Some(i) => i,
-                None => {
-                    level.push(MenuNode { label: p.to_string(), path: path.clone(), children: Vec::new() });
-                    level.len() - 1
-                }
-            };
-            let Some(node) = level.get_mut(idx) else { break };
-            level = &mut node.children;
-        }
+        insert_path(&mut roots, line);
+    }
+    for (path, _) in MENU_WINDOWS {
+        insert_path(&mut roots, path);
     }
     roots
 }
 
 pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
-    let t = crate::theme::Tokens::DARK;
-    egui::Panel::top("menu_bar")
-        .exact_size(24.0)
-        .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(22, 22, 23)).inner_margin(egui::Margin::symmetric(8, 2)))
-        .show(ui, |ui| {
+    let t = crate::theme::Tokens::current();
+    egui::Panel::top("menu_bar").exact_size(24.0).frame(egui::Frame::NONE.fill(t.menu_bar).inner_margin(egui::Margin::symmetric(8, 2))).show(
+        ui,
+        |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("SoundCraft", |ui| {
                     if ui.button("About SoundCraft").clicked() {
@@ -219,7 +227,8 @@ pub fn menu_bar(app: &mut SoundApp, ui: &mut egui::Ui) {
                     ui.label(egui::RichText::new(title).color(t.text_dim));
                 });
             });
-        });
+        },
+    );
 }
 
 fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str, &str)]) {
@@ -231,13 +240,8 @@ fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str
         });
         return;
     }
-    let id = catalog::implemented_by(&n.path, extra).or_else(|| MENU_WINDOWS.iter().find(|(p, _)| *p == n.path).map(|(_, w)| w.to_string()));
-    let enabled = match id.as_deref() {
-        Some(i) if i.starts_with("window.") || i.starts_with("view.mix_section") || i == "audiosuite.process" => true,
-        Some(i) => soundcraft_engine::find_command(i).is_some_and(|c| (c.enabled)(&app.engine).is_ok()),
-        None => false,
-    };
-    let checked = checked_state(app, &n.path, id.as_deref());
+    let id = command_for_path(&n.path, extra);
+    let (enabled, checked) = item_state(app, &n.path, id.as_deref());
     let label = if checked { format!("✔ {}", n.label) } else { n.label.clone() };
     let shortcut = id.as_deref().and_then(soundcraft_engine::find_command).and_then(|c| c.shortcut).unwrap_or("");
     let btn = egui::Button::new(label).shortcut_text(crate::shortcuts::shortcut_label(shortcut, ui.ctx().os().is_mac()));
@@ -247,6 +251,21 @@ fn menu_node(app: &mut SoundApp, ui: &mut egui::Ui, n: &MenuNode, extra: &[(&str
         invoke_menu(app, &id, &n.path);
         ui.close();
     }
+}
+
+/// Resolve the command behind a menu leaf, including UI dialog overrides.
+pub fn command_for_path(path: &str, extra: &[(&str, &str)]) -> Option<String> {
+    catalog::implemented_by(path, extra).or_else(|| MENU_WINDOWS.iter().find(|(p, _)| *p == path).map(|(_, w)| w.to_string()))
+}
+
+/// Enabled and checked state shared by all menu presentations.
+pub fn item_state(app: &SoundApp, path: &str, id: Option<&str>) -> (bool, bool) {
+    let enabled = match id {
+        Some(i) if i.starts_with("window.") || i.starts_with("view.mix_section") || i == "audiosuite.process" => true,
+        Some(i) => soundcraft_engine::find_command(i).is_some_and(|c| (c.enabled)(&app.engine).is_ok()),
+        None => false,
+    };
+    (enabled, checked_state(app, path, id))
 }
 
 fn checked_state(app: &SoundApp, path: &str, id: Option<&str>) -> bool {
@@ -338,6 +357,7 @@ fn params_for(path: &str, id: &str) -> Value {
 
 /// Menu items that open a SoundCraft window when clicked (programmatic calls still run the command).
 const MENU_WINDOWS: &[(&str, &str)] = &[
+    ("Setup > Appearance", "window.ui_customization"),
     ("Setup > Hardware...", "window.playback_engine"),
     ("Setup > Playback Engine...", "window.playback_engine"),
     ("Setup > I/O...", "window.io_setup"),
@@ -501,6 +521,19 @@ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<
         "ui.bounce_dialog" => {
             let _ = app.dialogs.open_for_command(&app.engine, "file.bounce_mix");
             json!({})
+        }
+        "ui.theme" => {
+            let Some(mode) = p.get("mode").and_then(Value::as_str) else {
+                return Some(Ok(json!({"mode": app.ui.theme.id()})));
+            };
+            let Some(mode) = crate::theme::ThemeMode::parse(mode) else {
+                return Some(Err(format!("unknown theme `{mode}` (system, light or dark)")));
+            };
+            if mode == crate::theme::ThemeMode::System {
+                crate::theme::refresh_system();
+            }
+            app.ui.theme = mode;
+            json!({"mode": mode.id()})
         }
         "ui.set" => match serde_json::to_value(&app.ui) {
             Ok(mut cur) => {

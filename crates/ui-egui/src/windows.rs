@@ -125,7 +125,9 @@ fn task_manager(app: &mut SoundApp, ctx: &egui::Context) {
     win(ctx, &mut open, "Task Manager", vec2(320.0, 120.0), |ui| {
         ui.label("No background tasks are running.");
         ui.label(
-            egui::RichText::new("Renders, bounces and AudioSuite processes run to completion before returning.").small().color(Tokens::DARK.text_dim),
+            egui::RichText::new("Renders, bounces and AudioSuite processes run to completion before returning.")
+                .small()
+                .color(Tokens::current().text_dim),
         );
     });
     app.ui.show_task_manager = open;
@@ -327,6 +329,7 @@ fn configurations(app: &mut SoundApp, ctx: &egui::Context) {
                     && let Ok(mut st) = serde_json::from_value::<crate::UiState>(v.clone())
                 {
                     st.configurations = app.ui.configurations.clone();
+                    st.theme = app.ui.theme;
                     st.show_configurations = true;
                     app.ui = st;
                 }
