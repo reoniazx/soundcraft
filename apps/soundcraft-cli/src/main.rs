@@ -130,10 +130,8 @@ fn convert(args: &[String]) -> ExitCode {
         soundcraft_dsp::offline::normalize(&mut buf.channels, -0.1, false);
     }
     let out_ext = std::path::Path::new(output).extension().and_then(|x| x.to_str()).unwrap_or("wav").to_ascii_lowercase();
-    let format = match out_ext.as_str() {
-        "aif" | "aiff" => soundcraft_audio_io::FileFormat::Aiff,
-        "flac" => soundcraft_audio_io::FileFormat::Flac,
-        _ => soundcraft_audio_io::FileFormat::Wav,
+    let Some(format) = soundcraft_audio_io::encode_format_for(&out_ext) else {
+        return fail(format!("{output}: cannot write `.{out_ext}` files (supported: {})", soundcraft_audio_io::ENCODE_EXTENSIONS));
     };
     let bit_depth = match arg_value(args, "--bit-depth").as_deref() {
         Some("16") => soundcraft_audio_io::BitDepth::Int16,

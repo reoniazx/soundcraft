@@ -233,11 +233,10 @@ fn bounce(e: &mut Engine, p: &Value) -> Result<Value> {
     let r = range_param(e, "file.bounce_mix", p)?;
     let r = if r.is_empty() { soundcraft_time::Range::new(0, e.session().content_end().max(1)) } else { r };
     let ext = std::path::Path::new(&path).extension().and_then(|x| x.to_str()).unwrap_or("wav").to_ascii_lowercase();
-    let format = match str_param(p, "format").unwrap_or(ext.as_str()) {
-        "aif" | "aiff" => soundcraft_audio_io::FileFormat::Aiff,
-        "flac" => soundcraft_audio_io::FileFormat::Flac,
-        _ => soundcraft_audio_io::FileFormat::Wav,
-    };
+    let format_name = str_param(p, "format").unwrap_or(ext.as_str());
+    let format = soundcraft_audio_io::encode_format_for(format_name).ok_or_else(|| {
+        bad("file.bounce_mix", format!("cannot write `{format_name}` files (supported: {})", soundcraft_audio_io::ENCODE_EXTENSIONS))
+    })?;
     let bit_depth = match p.get("bit_depth").map(|b| b.to_string().trim_matches('"').to_string()).as_deref() {
         Some("16") => soundcraft_audio_io::BitDepth::Int16,
         Some("32") | Some("32f") => soundcraft_audio_io::BitDepth::Float32,
@@ -272,8 +271,24 @@ fn write_score(e: &mut Engine, p: &Value, id: &str, svg: bool) -> Result<Value> 
 }
 
 #[cfg(test)]
-mod open_tests {
+mod tests {
     use super::*;
+
+    #[test]
+    fn bounce_refuses_formats_it_cannot_write() {
+        let mut e = Engine::default();
+        let dir = std::env::temp_dir().join(format!("sc-bounce-ext-{}", std::process::id()));
+        assert!(std::fs::create_dir_all(&dir).is_ok());
+        for name in ["mix.mp3", "mix.ogg", "mix.xyz"] {
+            let path = dir.join(name);
+            let err = e.execute("file.bounce_mix", &json!({"path": path.to_string_lossy(), "start": 0, "end": 480})).map(|_| ()).unwrap_err();
+            assert!(err.to_string().contains("supported: wav"), "{name}: {err}");
+            assert!(!path.exists(), "{name} must not be written");
+        }
+        let ok = dir.join("mix.flac");
+        assert!(e.execute("file.bounce_mix", &json!({"path": ok.to_string_lossy(), "start": 0, "end": 480})).is_ok());
+        assert!(std::fs::remove_dir_all(&dir).is_ok());
+    }
 
     fn remove_media(dir: &std::path::Path) {
         for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
