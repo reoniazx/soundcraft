@@ -31,3 +31,7 @@ sync_github_name = true
 real_name = "Gert Pellin"
 display_name = "Gert Pellin"
 sync_github_name = false
+
+[people.salignatmoandal]
+real_name = "Mawen Salignat-Moandal"
+sync_github_name = true
