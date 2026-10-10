@@ -32,6 +32,18 @@ pub struct EditLayout {
     pub rows: Vec<(u64, [f32; 4])>,
     pub scroll_y: f32,
     pub content_h: f32,
+    /// Follow-hold: the view was moved by something other than the playhead
+    /// follow (a manual pan, scrollbar, universe jump, or programmatic
+    /// scroll) during playback, so timeline auto-scroll stays paused until
+    /// the playhead is scrolled back into view (or the transport
+    /// stops/starts, or a scrolling mode is re-selected). Lets the timeline
+    /// be inspected anywhere while playing.
+    pub follow_hold: bool,
+    /// Session `zoom.scroll` seen by the last overlay frame, for telling our
+    /// own follow jumps apart from outside view moves.
+    pub last_scroll: Samples,
+    /// Follow target issued by the last overlay frame (`None` when none).
+    pub last_follow_to: Option<Samples>,
 }
 
 pub fn x_of(s: &Session, tl: Rect, at: Samples) -> f32 {
@@ -50,7 +62,7 @@ pub fn track_height(t: &Track) -> f32 {
 }
 
 pub fn show(app: &mut SoundApp, ui: &mut Ui) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     egui::Panel::top("edit_toolbar").exact_size(toolbar::HEIGHT).frame(egui::Frame::NONE.fill(t.toolbar_bg)).show(ui, |ui| toolbar::show(app, ui));
     egui::Panel::bottom("edit_status").exact_size(22.0).frame(egui::Frame::NONE.fill(t.toolbar_bg)).show(ui, |ui| status_bar(app, ui));
     egui::Panel::bottom("lower_dock_tabs").exact_size(22.0).frame(egui::Frame::NONE.fill(t.panel_bg2)).show(ui, |ui| dock_tabs(app, ui));
@@ -63,7 +75,7 @@ pub fn show(app: &mut SoundApp, ui: &mut Ui) {
             .show(ui, |ui| crate::midi_editor::show(app, ui));
     }
     if app.ui.show_universe {
-        egui::Panel::top("universe").exact_size(64.0).frame(egui::Frame::NONE.fill(Color32::from_rgb(18, 18, 19))).show(ui, |ui| universe(app, ui));
+        egui::Panel::top("universe").exact_size(64.0).frame(egui::Frame::NONE.fill(Tokens::current().universe_bg)).show(ui, |ui| universe(app, ui));
     }
     if app.ui.show_tracks_list {
         egui::Panel::left("tracks_list")
@@ -101,10 +113,10 @@ fn universe(app: &mut SoundApp, ui: &mut Ui) {
     let tlw = app.edit_layout.timeline[2] - app.edit_layout.timeline[0];
     let vis1 = vis0 + (f64::from(tlw.max(100.0)) * s.edit.zoom.samples_per_px) as f32 / total;
     let vr = Rect::from_min_max(pos2(r.min.x + vis0 * r.width(), r.min.y - 2.0), pos2(r.min.x + vis1.min(1.0) * r.width(), r.max.y + 2.0));
-    ui.painter().rect_stroke(vr, 2.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
+    ui.painter().rect_stroke(vr, 2.0, Stroke::new(1.5, Tokens::current().universe_view), StrokeKind::Outside);
     if app.is_playing() {
         let x = r.min.x + app.position() as f32 / total * r.width();
-        ui.painter().line_segment([pos2(x, r.min.y), pos2(x, r.max.y)], Stroke::new(1.0, Tokens::DARK.playhead));
+        ui.painter().line_segment([pos2(x, r.min.y), pos2(x, r.max.y)], Stroke::new(1.0, Tokens::current().playhead));
     }
     let resp = ui.interact(r, ui.id().with("universe"), Sense::click_and_drag());
     if let Some(p) = resp.interact_pointer_pos()
@@ -117,7 +129,7 @@ fn universe(app: &mut SoundApp, ui: &mut Ui) {
 }
 
 fn dock_tabs(app: &mut SoundApp, ui: &mut Ui) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let r = ui.max_rect();
     let mut x = r.min.x + 10.0;
     for (label, on, id) in [
@@ -139,7 +151,7 @@ fn dock_tabs(app: &mut SoundApp, ui: &mut Ui) {
 }
 
 fn status_bar(app: &mut SoundApp, ui: &mut Ui) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let r = ui.max_rect();
     let s = app.engine.session();
     let left = format!(
@@ -166,7 +178,7 @@ fn status_bar(app: &mut SoundApp, ui: &mut Ui) {
 }
 
 fn main_area(app: &mut SoundApp, ui: &mut Ui) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let full = ui.max_rect();
     let rulers: Vec<String> = app.engine.session().edit.rulers.clone();
     let mut rulers = rulers;
@@ -251,7 +263,7 @@ fn folder_collapsed(s: &Session, t: &Track) -> bool {
 }
 
 fn hscrollbar(app: &mut SoundApp, ui: &mut Ui, sb: Rect, tl: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     ui.painter().rect_filled(sb, 0.0, t.panel_bg);
     let s = app.engine.session();
     let total = (s.content_end() + s.sample_rate.samples(30.0)).max(1) as f64;
@@ -349,7 +361,7 @@ fn nice_step(spp: f64, sr: f64, min_px: f64) -> i64 {
 }
 
 fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[String]) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let s = app.engine.session().clone();
     ui.painter().rect_filled(area, 0.0, t.ruler_bg);
     let view = Range::new(sample_at(&s, tl, tl.min.x), sample_at(&s, tl, tl.max.x));
@@ -372,13 +384,7 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
                 {
                     let at = snap(&s, sample_at(&s, tl, p.x).max(0));
                     let bpm = s.tempo.tempo_at_tick(s.tempo.samples_to_ticks(at, sr));
-                    app.dialogs.open = Some(crate::dialogs::Dialog::Number {
-                        cmd: format!("event.tempo@{at}"),
-                        title: "Tempo Change (BPM)".into(),
-                        key: "bpm".into(),
-                        value: bpm,
-                        suffix: "bpm".into(),
-                    });
+                    app.dialogs.open = Some(crate::dialogs::Dialog::TempoChange { at, bpm });
                 }
                 let mut last_label = f32::MIN;
                 for ev in s.tempo.tempos() {
@@ -472,7 +478,7 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
                         col,
                         Stroke::NONE,
                     ));
-                    painter.text(pos2(x + 8.0, row.center().y), Align2::LEFT_CENTER, &m.name, bold(11.0), Color32::from_rgb(236, 236, 236));
+                    painter.text(pos2(x + 8.0, row.center().y), Align2::LEFT_CENTER, &m.name, bold(11.0), t.marker_text);
                 }
                 // Click on the marker ruler: recall a marker; double-click adds one.
                 let resp = ui.interact(row, ui.id().with(("marker_ruler", lane)), Sense::click());
@@ -516,7 +522,7 @@ fn draw_rulers(app: &mut SoundApp, ui: &mut Ui, area: Rect, tl: Rect, rulers: &[
 }
 
 fn timebase_ruler(_ui: &Ui, painter: &egui::Painter, s: &Session, tl: Rect, row: Rect, view: Range, f: TimeFormat, bottom: bool) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let sr = s.sample_rate;
     let spp = s.edit.zoom.samples_per_px;
     let mut marks: Vec<(Samples, bool)> = Vec::new();
@@ -615,7 +621,7 @@ fn timebase_ruler(_ui: &Ui, painter: &egui::Painter, s: &Session, tl: Rect, row:
 // ---- track rows ------------------------------------------------------------------------------
 
 fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let s = app.engine.session();
     let Some(track) = s.track(id).cloned() else { return };
     let selected = s.edit.selected_tracks.contains(&id);
@@ -628,7 +634,7 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect) 
     let main_h = track.height.points();
     let lane = Rect::from_min_max(pos2(tl.min.x, row.min.y), pos2(tl.max.x, row.min.y + main_h));
     // Header background.
-    ui.painter().rect_filled(head, 0.0, if selected { Color32::from_rgb(52, 58, 66) } else { t.panel_bg2 });
+    ui.painter().rect_filled(head, 0.0, if selected { t.header_selected } else { t.panel_bg2 });
     ui.painter().rect_filled(Rect::from_min_size(head.min, vec2(5.0, head.height())), 0.0, rgb(track.color));
     ui.painter().line_segment([pos2(head.min.x, row.max.y + 0.5), pos2(tl.max.x, row.max.y + 0.5)], Stroke::new(1.0, t.border));
     track_header(app, ui, &track, head, selected);
@@ -670,7 +676,7 @@ fn track_row(app: &mut SoundApp, ui: &mut Ui, id: TrackId, row: Rect, tl: Rect) 
 
 /// Alternate playlists as lanes under the main one; clicking a clip promotes it (comping).
 fn playlist_lanes(app: &mut SoundApp, ui: &mut Ui, track: &Track, row: Rect, main_h: f32, tl: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let s = app.engine.session().clone();
     let mut y = row.min.y + main_h;
     for (i, pl) in track.playlists.iter().enumerate() {
@@ -679,7 +685,7 @@ fn playlist_lanes(app: &mut SoundApp, ui: &mut Ui, track: &Track, row: Rect, mai
         }
         let lane = Rect::from_min_max(pos2(tl.min.x, y), pos2(tl.max.x, y + LANE_H));
         let head = Rect::from_min_max(pos2(row.min.x + 12.0, y), pos2(tl.min.x, y + LANE_H));
-        ui.painter().rect_filled(lane, 0.0, Color32::from_rgb(30, 30, 31));
+        ui.painter().rect_filled(lane, 0.0, t.playlist_lane);
         ui.painter().text(pos2(head.min.x + 4.0, head.center().y), Align2::LEFT_CENTER, &pl.name, regular(10.5), t.text_dim);
         let painter = ui.painter().with_clip_rect(lane.intersect(ui.clip_rect()));
         for c in &pl.clips {
@@ -708,7 +714,7 @@ fn playlist_lanes(app: &mut SoundApp, ui: &mut Ui, track: &Track, row: Rect, mai
 }
 
 fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, selected: bool) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let id = track.id;
     // Drag the bottom edge to resize (snaps to the height presets).
     let edge = Rect::from_min_max(pos2(head.min.x, head.max.y - 4.0), pos2(head.max.x, head.max.y + 2.0));
@@ -778,7 +784,7 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
             .unwrap_or(p.y);
         ui.ctx()
             .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("reorder")))
-            .line_segment([pos2(head.min.x, line_y), pos2(head.max.x + 600.0, line_y)], Stroke::new(3.0, Tokens::DARK.accent));
+            .line_segment([pos2(head.min.x, line_y), pos2(head.max.x + 600.0, line_y)], Stroke::new(3.0, Tokens::current().accent));
     }
     if nresp.drag_stopped()
         && let Some(p) = ui.ctx().pointer_latest_pos()
@@ -833,7 +839,15 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
         TrackKind::Video => "VIDEO",
     };
     if !kind_label.is_empty() {
-        ui.painter().text(pos2(pl_r.max.x + 4.0, name_r.center().y), Align2::LEFT_CENTER, kind_label, bold(9.0), t.text_dim);
+        let kr = ui.painter().text(pos2(pl_r.max.x + 4.0, name_r.center().y), Align2::LEFT_CENTER, kind_label, bold(9.0), t.text_dim);
+        if track.kind == TrackKind::Instrument {
+            // The instrument picker (and the instrument's editor) behind the INST label.
+            let name = track.instrument.as_ref().and_then(|i| crate::mix_window::plugin_info(&i.plugin)).map_or("none", |p| p.name);
+            let resp = ui
+                .interact(kr.expand(3.0), ui.id().with(("instrument", id.0)), Sense::click())
+                .on_hover_text(format!("Instrument: {name} (click to change or open its editor)"));
+            egui::Popup::menu(&resp).show(|ui| crate::mix_window::instrument_menu(app, ui, id));
+        }
     }
     if h < 30.0 {
         return;
@@ -919,7 +933,7 @@ fn track_header(app: &mut SoundApp, ui: &mut Ui, track: &Track, head: Rect, sele
 
 /// One optional Edit-window column for a track (I/O, inserts, sends, comments).
 fn header_column(app: &mut SoundApp, ui: &mut Ui, track: &Track, col: &str, r: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     ui.painter().rect_filled(r, 0.0, t.panel_bg);
     ui.painter().line_segment([pos2(r.min.x, r.min.y), pos2(r.min.x, r.max.y)], Stroke::new(1.0, t.border));
     let line_h = 15.0;
@@ -1062,7 +1076,7 @@ fn track_context_menu(app: &mut SoundApp, ui: &mut Ui, id: TrackId) {
 }
 
 fn grid_lines(painter: &egui::Painter, s: &Session, tl: Rect, lane: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let view = Range::new(sample_at(s, tl, tl.min.x).max(0), sample_at(s, tl, tl.max.x));
     let sr = s.sample_rate;
     // Bar lines always; grid lines when enabled and dense enough.
@@ -1301,7 +1315,7 @@ fn draw_clip(app: &SoundApp, painter: &egui::Painter, s: &Session, track: &Track
 }
 
 fn draw_automation(painter: &egui::Painter, s: &Session, track: &Track, p: &AutoParam, tl: Rect, lane: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (lo, hi, _) = p.range();
     let (lo, hi) = if matches!(p, AutoParam::Volume | AutoParam::SendLevel(_)) {
         (-60.0f32, 12.0f32)
@@ -1372,6 +1386,20 @@ fn clip_at(track: &Track, at: Samples) -> Option<&Clip> {
 fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, tl: Rect) {
     let id = ui.id().with(("lane", track.id.0));
     let resp = ui.interact(lane, id, Sense::click_and_drag());
+    // The clip menu is attached before the early return below: once the menu is open the pointer
+    // is over the popup, the lane has no hover position, and the rest of this function bails out.
+    // The clip is remembered at the right-click so the menu keeps its target while it is used.
+    let menu_clip_id = id.with("menu_clip");
+    if resp.secondary_clicked() {
+        let clip = resp.interact_pointer_pos().and_then(|p| {
+            let s = app.engine.session();
+            clip_at(track, sample_at(s, tl, p.x).max(0)).map(|c| c.id)
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(menu_clip_id, clip));
+    }
+    // The clip may have been removed or moved since the right-click; only use it if it still exists.
+    let menu_clip = ui.ctx().data(|d| d.get_temp::<Option<ClipId>>(menu_clip_id)).flatten().filter(|c| track.clips().iter().any(|x| x.id == *c));
+    resp.context_menu(|ui| clip_context_menu(app, ui, menu_clip));
     // Audio files dropped from the Clip List.
     if let Some(src) = resp.dnd_release_payload::<crate::DragSource>()
         && let Some(p) = ui.ctx().pointer_latest_pos()
@@ -1381,7 +1409,7 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
         let _ = app.run("clip.place_source", json!({"source": src.0, "track": track.id.0, "at": at}));
     }
     if resp.dnd_hover_payload::<crate::DragSource>().is_some() {
-        ui.painter().rect_stroke(lane, 0.0, Stroke::new(2.0, Tokens::DARK.accent), StrokeKind::Inside);
+        ui.painter().rect_stroke(lane, 0.0, Stroke::new(2.0, Tokens::current().accent), StrokeKind::Inside);
     }
     let s = app.engine.session().clone();
     let tool = s.edit.tool;
@@ -1613,7 +1641,6 @@ fn lane_interaction(app: &mut SoundApp, ui: &mut Ui, track: &Track, lane: Rect, 
     {
         let _ = app.run("edit.select", json!({"clips": [c.id.0]}));
     }
-    resp.context_menu(|ui| clip_context_menu(app, ui, hit.as_ref().map(|c| c.id)));
 }
 
 fn automation_id(p: &AutoParam) -> String {
@@ -1679,9 +1706,46 @@ fn clip_context_menu(app: &mut SoundApp, ui: &mut Ui, clip: Option<ClipId>) {
     }
 }
 
+/// Next follow state after observing one frame: `(hold, follow_to)`.
+///
+/// The view is ours to move only while nothing else moved it: when the
+/// session scroll differs from both the last seen value and our own last
+/// follow target, something else (a manual pan, scrollbar, universe jump,
+/// or programmatic scroll) took over, so the follow pauses (`hold`) and no
+/// jump is issued. Stopping, or scrolling back to the playhead, clears the
+/// hold. Only `page`/`continuous`/`center` ever issue follow jumps while
+/// playing; `none`/`after_playback` leave the view alone.
+fn follow_update(
+    playing: bool,
+    mode_follow: bool,
+    playhead_visible: bool,
+    cur: Samples,
+    last_scroll: Samples,
+    last_follow_to: Option<Samples>,
+    hold: bool,
+    pos: Samples,
+) -> (bool, Option<Samples>) {
+    if !playing || playhead_visible {
+        return (false, None);
+    }
+    if cur != last_scroll && Some(cur) != last_follow_to {
+        return (mode_follow, None);
+    }
+    if hold || !mode_follow {
+        return (hold, None);
+    }
+    (false, Some(pos))
+}
+
 /// Selection overlay, insertion point and playhead across rulers and tracks.
+/// While playing, auto-scroll keeps the playhead in view for the follow
+/// modes (`page`/`continuous`/`center`) — but any outside view move (a manual
+/// pan, scrollbar, universe jump, or programmatic scroll) pauses it, so the
+/// timeline can be inspected anywhere during playback. Scrolling back to the
+/// playhead, stopping/starting, or re-selecting a scrolling mode resumes the
+/// follow. `none` and `after_playback` never scroll during playback.
 fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let mut scroll_to: Option<Samples> = None;
     let s = app.engine.session();
     let painter = ui.painter().with_clip_rect(area);
@@ -1721,10 +1785,18 @@ fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
     if app.is_playing() {
         let x = x_of(s, tl, app.position());
         painter.line_segment([pos2(x, area.min.y), pos2(x, area.max.y)], Stroke::new(1.5, t.playhead));
-        // Page scrolling.
-        if s.edit.scrolling != "none" && (x > tl.max.x || x < tl.min.x) {
-            scroll_to = Some(app.position());
-        }
+        // Session reads first (owned copies), then the layout mutation: the
+        // two borrow disjoint fields.
+        let pos = app.position();
+        let cur = s.edit.zoom.scroll;
+        let mode_follow = matches!(s.edit.scrolling.as_str(), "page" | "continuous" | "center");
+        let visible = x >= tl.min.x && x <= tl.max.x;
+        let layout = &mut app.edit_layout;
+        let (hold, follow_to) = follow_update(true, mode_follow, visible, cur, layout.last_scroll, layout.last_follow_to, layout.follow_hold, pos);
+        layout.follow_hold = hold;
+        layout.last_scroll = cur;
+        layout.last_follow_to = follow_to;
+        scroll_to = follow_to;
     }
     // Ghost of a clip move.
     if let Some(Gesture::MoveClips { clips, delta, to_track, .. }) = &app.gesture {
@@ -1761,5 +1833,49 @@ fn overlay(app: &mut SoundApp, ui: &mut Ui, tl: Rect, area: Rect) {
     }
     if let Some(at) = scroll_to {
         let _ = app.engine.execute("view.scroll", &json!({"to": at}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::follow_update;
+
+    #[test]
+    fn follow_jumps_to_offscreen_playhead_while_playing() {
+        // Steady view, follow mode, playhead left the screen: jump to it.
+        assert_eq!(follow_update(true, true, false, 1_000, 1_000, None, false, 96_000), (false, Some(96_000)));
+    }
+
+    #[test]
+    fn follow_leaves_onscreen_playhead_alone() {
+        assert_eq!(follow_update(true, true, true, 1_000, 1_000, None, false, 96_000), (false, None));
+    }
+
+    #[test]
+    fn follow_never_scrolls_when_stopped_nor_in_free_modes() {
+        assert_eq!(follow_update(false, true, false, 1_000, 1_000, None, false, 96_000), (false, None));
+        // `none`/`after_playback` never follow, even with a steady view.
+        assert_eq!(follow_update(true, false, false, 1_000, 1_000, None, false, 96_000), (false, None));
+        assert_eq!(follow_update(true, false, false, 9_000, 1_000, None, false, 96_000), (false, None));
+    }
+
+    #[test]
+    fn outside_view_move_pauses_the_follow() {
+        // The view moved and it was not our own jump: pause, no jump.
+        assert_eq!(follow_update(true, true, false, 9_000, 1_000, None, false, 96_000), (true, None));
+        // A held view stays held while it sits still elsewhere.
+        assert_eq!(follow_update(true, true, false, 9_000, 9_000, None, true, 96_000), (true, None));
+    }
+
+    #[test]
+    fn own_follow_jump_is_not_mistaken_for_a_takeover() {
+        // The scroll equals the target we issued last frame: keep following.
+        assert_eq!(follow_update(true, true, false, 96_000, 1_000, Some(96_000), false, 97_000), (false, Some(97_000)));
+    }
+
+    #[test]
+    fn hold_clears_when_playhead_returns_or_transport_stops() {
+        assert_eq!(follow_update(true, true, true, 9_000, 9_000, None, true, 96_000), (false, None));
+        assert_eq!(follow_update(false, true, false, 9_000, 9_000, None, true, 96_000), (false, None));
     }
 }
