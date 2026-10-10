@@ -11,8 +11,8 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "session.new", "New...", ["File"], Some("Cmd+N"), "{name?: 'Untitled', sample_rate?: 48000, bit_depth?: 24, template?: blank|demo}", always, new_session),
         cmd!(noundo "session.open", "Open Session...", ["File"], Some("Cmd+O"), "{path}", always, |e, p| {
             let path = str_param(p, "path").ok_or_else(|| bad("session.open", "`path` required"))?.to_string();
-            crate::io::open_session(e, &path)?;
-            Ok(json!({"name": e.session().name, "tracks": e.session().tracks.len()}))
+            let missing = crate::io::open_session(e, &path)?;
+            Ok(json!({"name": e.session().name, "tracks": e.session().tracks.len(), "missing": missing}))
         }),
         cmd!(noundo "session.close", "Close Session", ["File"], Some("Cmd+Shift+W"), "{}", always, |e, _| { e.replace_session(Session::default()); e.path = None; Ok(json!({})) }),
         cmd!(noundo "session.save", "Save Session", ["File"], Some("Cmd+S"), "{path?}", always, |e, p| {
@@ -269,4 +269,35 @@ fn write_score(e: &mut Engine, p: &Value, id: &str, svg: bool) -> Result<Value> 
     std::fs::write(&path, &text).map_err(|err| EngineError::Io(format!("{path}: {err}")))?;
     let measures = parts.iter().map(|p| p.measures.len()).max().unwrap_or(0);
     Ok(json!({"path": path, "parts": parts.len(), "measures": measures}))
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::*;
+
+    fn remove_media(dir: &std::path::Path) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                remove_media(&p);
+            } else if p.extension().is_some_and(|x| x != "scraft") {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+
+    #[test]
+    fn session_open_reports_missing_media() {
+        let mut e = crate::demo::demo_engine();
+        let dir = std::env::temp_dir().join(format!("soundcraft-open-missing-{}", std::process::id()));
+        let path = dir.join("Gone.scraft").to_string_lossy().into_owned();
+        e.execute("session.save_as", &json!({"path": path})).unwrap();
+        let mut ok = Engine::default();
+        assert!(ok.execute("session.open", &json!({"path": path})).unwrap()["missing"].as_array().is_some_and(Vec::is_empty));
+        remove_media(&dir);
+        let mut r = Engine::default();
+        let res = r.execute("session.open", &json!({"path": path})).unwrap();
+        assert!(res["missing"].as_array().is_some_and(|m| !m.is_empty()), "{res}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

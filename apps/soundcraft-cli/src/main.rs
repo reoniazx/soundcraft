@@ -90,8 +90,9 @@ fn info(args: &[String]) -> ExitCode {
     let Some(path) = args.first() else { return fail("info FILE") };
     if path.ends_with(".scraft") {
         let mut e = Engine::default();
-        if let Err(err) = soundcraft_engine::io::open_session(&mut e, path) {
-            return fail(err);
+        match soundcraft_engine::io::open_session(&mut e, path) {
+            Ok(missing) => warn_missing(&missing),
+            Err(err) => return fail(err),
         }
         outln!("{}", soundcraft_engine::inspect::session_text(&e));
         return ExitCode::SUCCESS;
@@ -149,10 +150,22 @@ fn convert(args: &[String]) -> ExitCode {
     }
 }
 
+/// One stderr line per media file a session refers to but could not load (the exit code is unchanged).
+fn missing_warnings(missing: &[String]) -> Vec<String> {
+    missing.iter().map(|m| format!("warning: missing media: {m}")).collect()
+}
+
+fn warn_missing(missing: &[String]) {
+    for line in missing_warnings(missing) {
+        eprintln!("{line}");
+    }
+}
+
 fn load_engine(args: &[String]) -> Result<Engine, String> {
     if let Some(p) = arg_value(args, "--in") {
         let mut e = Engine::default();
-        soundcraft_engine::io::open_session(&mut e, &p).map_err(|e| e.to_string())?;
+        let missing = soundcraft_engine::io::open_session(&mut e, &p).map_err(|e| e.to_string())?;
+        warn_missing(&missing);
         Ok(e)
     } else if args.iter().any(|a| a == "--demo" || a == "--sample") {
         Ok(soundcraft_engine::demo::demo_engine())
@@ -368,6 +381,13 @@ fn parity(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_media_gets_one_warning_each() {
+        assert!(missing_warnings(&[]).is_empty());
+        let w = missing_warnings(&["a.wav".to_string(), "b.wav: decode failed".to_string()]);
+        assert_eq!(w, vec!["warning: missing media: a.wav", "warning: missing media: b.wav: decode failed"]);
+    }
 
     #[test]
     fn cmd_spec_parses_id_and_json() {
