@@ -37,6 +37,17 @@ fn fail(msg: impl std::fmt::Display) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// The usage block of the module doc comment, up to its closing code fence.
+fn help_text() -> String {
+    include_str!("main.rs")
+        .lines()
+        .skip(3)
+        .take_while(|l| l.trim_end() != "//! ```")
+        .map(|l| l.trim_start_matches("//! "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = args.first().cloned() else {
@@ -50,7 +61,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "--help" | "-h" | "help" => {
-            outln!("{}", include_str!("main.rs").lines().skip(3).take(14).map(|l| l.trim_start_matches("//! ")).collect::<Vec<_>>().join("\n"));
+            outln!("{}", help_text());
             ExitCode::SUCCESS
         }
         "info" => info(&rest),
@@ -338,4 +349,18 @@ fn parity(args: &[String]) -> ExitCode {
         outln!("{md}");
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::help_text;
+
+    #[test]
+    fn help_text_is_only_the_usage_block() {
+        let help = help_text();
+        assert!(help.starts_with("soundcraft-cli info FILE"));
+        assert!(help.ends_with("soundcraft-cli plugins                          list built-in plugins"));
+        assert!(!help.contains("```"));
+        assert!(!help.contains("#![") && !help.contains("use serde_json"));
+    }
 }
