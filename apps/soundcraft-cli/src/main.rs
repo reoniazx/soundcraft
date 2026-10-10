@@ -192,6 +192,14 @@ fn time_arg(s: &str) -> Value {
     s.parse::<f64>().map_or_else(|_| json!(s), |f| json!({"seconds": f}))
 }
 
+/// `ID` or `ID=JSON` → command id and params; malformed JSON is an error, not `{}`.
+fn parse_cmd_spec(spec: &str) -> Result<(String, Value), String> {
+    match spec.split_once('=') {
+        Some((id, p)) => serde_json::from_str::<Value>(p).map(|v| (id.to_string(), v)).map_err(|err| format!("{id}: bad JSON: {err}")),
+        None => Ok((spec.to_string(), json!({}))),
+    }
+}
+
 fn run(args: &[String]) -> ExitCode {
     let mut e = match load_engine(args) {
         Ok(e) => e,
@@ -202,9 +210,9 @@ fn run(args: &[String]) -> ExitCode {
         if args.get(i).is_some_and(|a| a == "--cmd")
             && let Some(spec) = args.get(i + 1)
         {
-            let (id, params) = match spec.split_once('=') {
-                Some((id, p)) => (id.to_string(), serde_json::from_str::<Value>(p).unwrap_or(json!({}))),
-                None => (spec.clone(), json!({})),
+            let (id, params) = match parse_cmd_spec(spec) {
+                Ok(v) => v,
+                Err(err) => return fail(err),
             };
             match e.execute(&id, &params) {
                 Ok(v) => outln!("{id}: {v}"),
@@ -284,7 +292,13 @@ fn app(args: &[String]) -> ExitCode {
         .map(|(_, a)| a)
         .collect();
     let Some(method) = positional.first() else { return fail("app [--port P] METHOD [JSON]") };
-    let params = positional.get(1).and_then(|p| serde_json::from_str::<Value>(p).ok()).unwrap_or(json!({}));
+    let params = match positional.get(1) {
+        Some(p) => match serde_json::from_str::<Value>(p) {
+            Ok(v) => v,
+            Err(err) => return fail(format!("{method}: bad JSON: {err}")),
+        },
+        None => json!({}),
+    };
     let mut r = Remote::new(&port);
     // A bare command id is shorthand for engine.execute.
     let (m, p) = if method.contains('.')
@@ -353,7 +367,19 @@ fn parity(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::help_text;
+    use super::*;
+
+    #[test]
+    fn cmd_spec_parses_id_and_json() {
+        assert_eq!(parse_cmd_spec("a.b").unwrap(), ("a.b".to_string(), json!({})));
+        assert_eq!(parse_cmd_spec("a.b={\"x\":1}").unwrap(), ("a.b".to_string(), json!({"x": 1})));
+    }
+
+    #[test]
+    fn cmd_spec_rejects_truncated_json() {
+        let err = parse_cmd_spec("a.b={\"x\":").unwrap_err();
+        assert!(err.starts_with("a.b: bad JSON"), "{err}");
+    }
 
     #[test]
     fn help_text_is_only_the_usage_block() {
