@@ -37,6 +37,17 @@ fn fail(msg: impl std::fmt::Display) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// The usage block of the module doc comment, up to its closing code fence.
+fn help_text() -> String {
+    include_str!("main.rs")
+        .lines()
+        .skip(3)
+        .take_while(|l| l.trim_end() != "//! ```")
+        .map(|l| l.trim_start_matches("//! "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = args.first().cloned() else {
@@ -44,13 +55,13 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
-    match cmd.as_str() {
+    let code = match cmd.as_str() {
         "--version" | "-V" | "version" => {
             outln!("SoundCraft CLI {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         "--help" | "-h" | "help" => {
-            outln!("{}", include_str!("main.rs").lines().skip(3).take(14).map(|l| l.trim_start_matches("//! ")).collect::<Vec<_>>().join("\n"));
+            outln!("{}", help_text());
             ExitCode::SUCCESS
         }
         "info" => info(&rest),
@@ -69,7 +80,10 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         other => fail(format!("unknown subcommand `{other}`")),
-    }
+    };
+    // The subcommand's engine and its plugin instances are gone by now.
+    soundcraft_engine::shutdown_plugin_hosts();
+    code
 }
 
 fn info(args: &[String]) -> ExitCode {
@@ -365,5 +379,14 @@ mod tests {
     fn cmd_spec_rejects_truncated_json() {
         let err = parse_cmd_spec("a.b={\"x\":").unwrap_err();
         assert!(err.starts_with("a.b: bad JSON"), "{err}");
+    }
+
+    #[test]
+    fn help_text_is_only_the_usage_block() {
+        let help = help_text();
+        assert!(help.starts_with("soundcraft-cli info FILE"));
+        assert!(help.ends_with("soundcraft-cli plugins                          list built-in plugins"));
+        assert!(!help.contains("```"));
+        assert!(!help.contains("#![") && !help.contains("use serde_json"));
     }
 }
