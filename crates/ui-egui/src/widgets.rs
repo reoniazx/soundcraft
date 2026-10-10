@@ -6,7 +6,7 @@ use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, StrokeK
 
 /// A toolbar button with an icon; `on` draws the blue selected state.
 pub fn icon_button(ui: &mut Ui, size: egui::Vec2, icon: &str, on: bool, tip: &str) -> Response {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     let fill = if on {
         t.accent
@@ -24,7 +24,7 @@ pub fn icon_button(ui: &mut Ui, size: egui::Vec2, icon: &str, on: bool, tip: &st
 
 /// Square text toggle used for S / M / I / record etc.
 pub fn text_toggle(ui: &mut Ui, size: egui::Vec2, text: &str, on: bool, on_color: Color32, tip: &str) -> Response {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     let fill = if on {
         on_color
@@ -41,7 +41,7 @@ pub fn text_toggle(ui: &mut Ui, size: egui::Vec2, text: &str, on: bool, on_color
 
 /// Record-enable button (red dot).
 pub fn rec_toggle(ui: &mut Ui, size: egui::Vec2, on: bool, tip: &str) -> Response {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     let fill = if on {
         t.rec
@@ -57,7 +57,7 @@ pub fn rec_toggle(ui: &mut Ui, size: egui::Vec2, on: bool, tip: &str) -> Respons
 
 /// A dropdown-looking selector box. Returns the response (caller opens a menu on click).
 pub fn selector_box(ui: &mut Ui, width: f32, height: f32, text: &str, color: Color32) -> Response {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     ui.painter().rect(
         r,
@@ -76,7 +76,7 @@ pub fn selector_box(ui: &mut Ui, width: f32, height: f32, text: &str, color: Col
 
 /// Rotary knob for pan / send pan (-1..1). Drag vertically; double-click resets.
 pub fn pan_knob(ui: &mut Ui, size: f32, value: &mut f32, tip: &str) -> Response {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
     if resp.dragged() {
         let d = resp.drag_delta();
@@ -87,7 +87,7 @@ pub fn pan_knob(ui: &mut Ui, size: f32, value: &mut f32, tip: &str) -> Response 
     }
     let c = r.center();
     let rad = size * 0.42;
-    ui.painter().circle(c, rad, Color32::from_rgb(26, 26, 28), Stroke::new(1.0, Color32::from_rgb(90, 90, 94)));
+    ui.painter().circle(c, rad, t.knob_bg, Stroke::new(1.0, t.knob_ring));
     let n = 24;
     let start = std::f32::consts::PI * 0.75;
     let sweep = std::f32::consts::PI * 1.5;
@@ -104,7 +104,7 @@ pub fn pan_knob(ui: &mut Ui, size: f32, value: &mut f32, tip: &str) -> Response 
     let (a0, a1) = if at < mid { (at, mid) } else { (mid, at) };
     ui.painter().add(egui::Shape::line(arc(a0, a1), Stroke::new(2.0, t.counter_text)));
     let tip_pos = c + vec2(at.cos(), at.sin()) * rad * 0.85;
-    ui.painter().line_segment([c, tip_pos], Stroke::new(2.0, Color32::from_rgb(230, 230, 230)));
+    ui.painter().line_segment([c, tip_pos], Stroke::new(2.0, t.knob_pointer));
     resp.on_hover_text(tip)
 }
 
@@ -120,8 +120,8 @@ pub fn pan_text(v: f32) -> String {
 
 /// Vertical peak meter with green/yellow/red zones; values are linear peaks.
 pub fn meter(ui: &Ui, r: Rect, level: f32, hold: f32, clip: bool) {
-    let t = Tokens::DARK;
-    ui.painter().rect_filled(r, 0.0, Color32::from_rgb(8, 8, 8));
+    let t = Tokens::current();
+    ui.painter().rect_filled(r, 0.0, t.meter_bg);
     let pos = |v: f32| -> f32 {
         let db = if v <= 1e-6 { -80.0 } else { 20.0 * v.log10() };
         meter_pos(db)
@@ -151,7 +151,7 @@ pub fn meter(ui: &Ui, r: Rect, level: f32, hold: f32, clip: bool) {
         );
     }
     let clip_r = Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + 2.5));
-    ui.painter().rect_filled(clip_r, 0.0, if clip { t.meter_red } else { Color32::from_rgb(60, 20, 20) });
+    ui.painter().rect_filled(clip_r, 0.0, if clip { t.meter_red } else { t.meter_clip_off });
 }
 
 /// dB → 0..1 meter position (logarithmic-ish scale like hardware meters).
@@ -185,7 +185,7 @@ pub fn clip_gain_to_pos(db: f32) -> f32 {
 
 /// A fader: returns the new dB value when dragged. `db` in -144..12.
 pub fn fader(ui: &mut Ui, r: Rect, db: f32, id: egui::Id) -> Option<f32> {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let resp = ui.interact(r, id, Sense::click_and_drag());
     let slot = Rect::from_center_size(r.center(), vec2(5.0, r.height() - 14.0));
     ui.painter().rect_filled(slot, 2.0, t.fader_track);
@@ -248,7 +248,7 @@ pub enum PannerEdit {
 /// Drag moves the puck; double-click returns it to front centre; Alt-drag (or the slider below)
 /// sets divergence; height layouts get a second slider for elevation. Returns the edit, if any.
 pub fn surround_panner(ui: &mut Ui, size: f32, speakers: &[PannerSpeaker], puck: (f32, f32), divergence: f32, z: Option<f32>) -> Option<PannerEdit> {
-    let t = Tokens::DARK;
+    let t = Tokens::current();
     let mut edit = None;
     let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click_and_drag());
     let half = size * 0.5 - 6.0;
@@ -346,12 +346,12 @@ pub fn multi_meter(ui: &Ui, r: Rect, levels: &[f32], labels: &[String], clip: bo
         let br = Rect::from_min_size(pos2(x, mr.min.y), vec2(w, mr.height()));
         meter(ui, br, *lv, *lv, clip);
         if let Some(l) = labels.get(i) {
-            let galley = ui.painter().layout_no_wrap(l.clone(), regular(7.0), Tokens::DARK.text_dim);
+            let galley = ui.painter().layout_no_wrap(l.clone(), regular(7.0), Tokens::current().text_dim);
             let gw = galley.size().x;
             let gh = galley.size().y;
             // Rotated 90° anticlockwise, reading bottom-to-top, centred under the bar.
             let pos = pos2(br.center().x - gh * 0.5, mr.max.y + 2.0 + gw.min(label_h - 2.0));
-            ui.painter().add(egui::epaint::TextShape::new(pos, galley, Tokens::DARK.text_dim).with_angle(-std::f32::consts::FRAC_PI_2));
+            ui.painter().add(egui::epaint::TextShape::new(pos, galley, Tokens::current().text_dim).with_angle(-std::f32::consts::FRAC_PI_2));
         }
     }
 }
