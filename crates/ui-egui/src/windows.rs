@@ -180,7 +180,9 @@ fn task_manager(app: &mut SoundApp, ctx: &egui::Context) {
     win(ctx, &mut open, "Task Manager", vec2(320.0, 120.0), |ui| {
         ui.label("No background tasks are running.");
         ui.label(
-            egui::RichText::new("Renders, bounces and AudioSuite processes run to completion before returning.").small().color(Tokens::DARK.text_dim),
+            egui::RichText::new("Renders, bounces and AudioSuite processes run to completion before returning.")
+                .small()
+                .color(Tokens::current().text_dim),
         );
     });
     app.ui.show_task_manager = open;
@@ -382,6 +384,7 @@ fn configurations(app: &mut SoundApp, ctx: &egui::Context) {
                     && let Ok(mut st) = serde_json::from_value::<crate::UiState>(v.clone())
                 {
                     st.configurations = app.ui.configurations.clone();
+                    st.theme = app.ui.theme;
                     st.show_configurations = true;
                     app.ui = st;
                 }
@@ -481,11 +484,12 @@ pub fn io_setup(app: &mut SoundApp, ctx: &egui::Context) {
 /// Setup › Keyboard Shortcuts.
 pub fn shortcuts_window(app: &mut SoundApp, ctx: &egui::Context) {
     let mut open = app.ui.show_shortcuts;
+    let mac = ctx.os().is_mac();
     win(ctx, &mut open, "Keyboard Shortcuts", vec2(520.0, 480.0), |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("sc").num_columns(3).striped(true).show(ui, |ui| {
                 for c in soundcraft_engine::command_specs().iter().filter(|c| c.shortcut.is_some()) {
-                    ui.label(egui::RichText::new(c.shortcut.unwrap_or("")).font(mono(11.0)));
+                    ui.label(egui::RichText::new(crate::shortcuts::shortcut_label(c.shortcut.unwrap_or(""), mac)).font(mono(11.0)));
                     ui.label(c.label);
                     ui.label(egui::RichText::new(c.menu.join(" › ")).small());
                     ui.end_row();
